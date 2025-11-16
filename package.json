@@ -1,0 +1,91 @@
+{
+  "name": "claudate",
+  "version": "1.0.0",
+  "description": "Enterprise-grade Claudate application built with Electron, React, and TypeScript",
+  "main": "dist/main/index.js",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:vite\" \"npm run dev:electron\"",
+    "dev:vite": "vite",
+    "dev:electron": "tsc -p tsconfig.main.json && electron dist/main/index.js",
+    "dev:electron:watch": "nodemon --watch src/main --ext ts --exec \"npm run dev:electron\"",
+    "build": "npm run build:vite && npm run build:electron && npm run postbuild:main",
+    "build:vite": "vite build",
+    "build:electron": "tsc -p tsconfig.main.json",
+    "postbuild:main": "node scripts/obfuscate-main.js",
+    "lint": "eslint src --ext .ts,.tsx --report-unused-disable-directs --max-warnings 0",
+    "lint:fix": "eslint src --ext .ts,.tsx --fix",
+    "type-check": "tsc --noEmit",
+    "test": "vitest",
+    "test:ui": "vitest --ui",
+    "preview": "vite preview",
+    "package": "electron-builder",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "keywords": [
+    "electron",
+    "react",
+    "typescript",
+    "claude",
+    "ai"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@toon-format/toon": "^1.0.0",
+    "@types/node": "^20.11.5",
+    "@types/react": "^18.2.48",
+    "@types/react-dom": "^18.2.18",
+    "@typescript-eslint/eslint-plugin": "^6.19.0",
+    "@typescript-eslint/parser": "^6.19.0",
+    "@vitejs/plugin-react-swc": "^3.5.0",
+    "autoprefixer": "^10.4.17",
+    "concurrently": "^8.2.2",
+    "electron": "^28.2.0",
+    "electron-builder": "^24.9.1",
+    "eslint": "^8.56.0",
+    "eslint-plugin-react-hooks": "^4.6.0",
+    "eslint-plugin-react-refresh": "^0.4.5",
+    "javascript-obfuscator": "^4.1.0",
+    "nodemon": "^3.0.3",
+    "postcss": "^8.4.33",
+    "tailwindcss": "^3.4.1",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3",
+    "vite": "^5.0.12",
+    "vitest": "^1.2.0"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.12.0",
+    "@tailwindcss/typography": "^0.5.19",
+    "@vscode/codicons": "^0.0.41",
+    "better-sqlite3": "^11.8.1",
+    "dexie": "^4.2.1",
+    "electron-log": "^5.0.1",
+    "electron-store": "^8.1.0",
+    "highlight.js": "^11.11.1",
+    "immer": "^10.0.3",
+    "lowdb": "^7.0.1",
+    "lunr": "^2.3.9",
+    "lunr-languages": "^1.14.0",
+    "nanoid": "^5.0.4",
+    "natural": "^8.1.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-markdown": "^10.1.0",
+    "react-router-dom": "^7.9.5",
+    "rehype-highlight": "^7.0.2",
+    "remark-gfm": "^4.0.1",
+    "zod": "^3.22.4",
+    "zustand": "^4.5.0"
+  },
+  "build": {
+    "asar": true,
+    "files": [
+      "dist/**",
+      "resources/**"
+    ],
+    "directories": {
+      "output": "release"
+    }
+  }
+}
