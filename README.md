@@ -1,14 +1,18 @@
-# Claudate - AI-Powered Desktop Assistant
+# ClautMate - AI-Powered Desktop Assistant
 
 <div align="center">
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![License](https://img.shields.io/badge/license-GPL3.0-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.3-blue)
 ![Electron](https://img.shields.io/badge/Electron-28-47848F)
 ![React](https://img.shields.io/badge/React-18-61DAFB)
 
 A production-ready desktop application built with Electron, React, and TypeScript, featuring Claude AI integration for intelligent assistance.
+
+[English](./README.md) | [简体中文](./README_CN.md)
+
+![ClautMate Screenshot](./imgae/1.jpg)
 
 [Features](#-features) • [Installation](#-installation) • [Usage](#-usage) • [Architecture](#-architecture) • [Contributing](#-contributing)
 
@@ -57,8 +61,8 @@ A production-ready desktop application built with Electron, React, and TypeScrip
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/yourusername/claudate.git
-   cd claudate
+   git clone https://github.com/yourusername/ClautMate.git
+  cd ClautMate
    ```
 
 2. **Install dependencies**
@@ -135,7 +139,7 @@ If Claude CLI is not detected:
 ### Project Structure
 
 ```
-claudate/
+ClautMate/
 ├── src/
 │   ├── main/              # Electron main process
 │   │   ├── managers/      # Window & IPC managers
@@ -256,7 +260,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## 📝 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the GPL3.0 License - see the [LICENSE](LICENSE) file for details.
 
 ---
 
@@ -271,8 +275,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 📧 Contact & Support
 
-- **Issues**: [GitHub Issues](https://github.com/yourusername/claudate/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/yourusername/claudate/discussions)
+- **Issues**: [GitHub Issues](https://github.com/yourusername/ClautMate/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/yourusername/ClautMate/discussions)
 
 ---
 
@@ -280,6 +284,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 **Built with ❤️ using Electron + React + TypeScript**
 
-[⬆ Back to Top](#claudate---ai-powered-desktop-assistant)
+[⬆ Back to Top](#clautmate---ai-powered-desktop-assistant)
 
 </div>

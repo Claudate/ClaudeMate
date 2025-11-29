@@ -1,8 +1,8 @@
-# Claudate - AI 驱动的桌面助手
+# ClautMate - AI 驱动的桌面助手
 
 <div align="center">
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![License](https://img.shields.io/badge/license-GPL3.0-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.3-blue)
 ![Electron](https://img.shields.io/badge/Electron-28-47848F)
@@ -11,6 +11,8 @@
 使用 Electron、React 和 TypeScript 构建的生产级桌面应用，集成 Claude AI 提供智能辅助功能。
 
 [English](./README.md) | 简体中文
+
+![ClautMate Screenshot](./imgae/1.jpg)
 
 [功能特性](#-功能特性) • [安装](#-安装) • [使用](#-使用) • [架构](#-架构) • [贡献](#-贡献)
 
@@ -59,8 +61,8 @@
 
 1. **克隆仓库**
    ```bash
-   git clone https://github.com/yourusername/claudate.git
-   cd claudate
+   git clone https://github.com/yourusername/ClautMate.git
+  cd ClautMate
    ```
 
 2. **安装依赖**
@@ -137,7 +139,7 @@
 ### 项目结构
 
 ```
-claudate/
+ClautMate/
 ├── src/
 │   ├── main/              # Electron 主进程
 │   │   ├── managers/      # 窗口和 IPC 管理器
@@ -258,7 +260,7 @@ const navItems: NavItem[] = [
 
 ## 📝 许可证
 
-本项目采用 MIT 许可证 - 详见 [LICENSE](LICENSE) 文件。
+本项目采用 GPL3.0 许可证 - 详见 [LICENSE](LICENSE) 文件。
 
 ---
 
@@ -273,8 +275,8 @@ const navItems: NavItem[] = [
 
 ## 📧 联系与支持
 
-- **问题反馈**：[GitHub Issues](https://github.com/yourusername/claudate/issues)
-- **讨论交流**：[GitHub Discussions](https://github.com/yourusername/claudate/discussions)
+- **问题反馈**：[GitHub Issues](https://github.com/yourusername/ClautMate/issues)
+- **讨论交流**：[GitHub Discussions](https://github.com/yourusername/ClautMate/discussions)
 
 ---
 
@@ -282,6 +284,6 @@ const navItems: NavItem[] = [
 
 **用 ❤️ 构建，基于 Electron + React + TypeScript**
 
-[⬆ 返回顶部](#claudate---ai-驱动的桌面助手)
+[⬆ 返回顶部](#clautmate---ai-驱动的桌面助手)
 
 </div>
