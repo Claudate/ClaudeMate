@@ -278,6 +278,11 @@ const navItems: NavItem[] = [
 - **问题反馈**：[GitHub Issues](https://github.com/yourusername/ClautMate/issues)
 - **讨论交流**：[GitHub Discussions](https://github.com/yourusername/ClautMate/discussions)
 
+<div align="left">
+  <p><strong>加入微信交流群：</strong></p>
+  <img src="./imgae/2wechat.jpg" alt="微信交流群" width="200" />
+</div>
+
 ---
 
 <div align="center">

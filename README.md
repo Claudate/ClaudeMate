@@ -278,6 +278,11 @@ This project is licensed under the GPL3.0 License - see the [LICENSE](LICENSE) f
 - **Issues**: [GitHub Issues](https://github.com/yourusername/ClautMate/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/yourusername/ClautMate/discussions)
 
+<div align="left">
+  <p><strong>Join our WeChat Group:</strong></p>
+  <img src="./imgae/2wechat.jpg" alt="WeChat Group" width="200" />
+</div>
+
 ---
 
 <div align="center">
