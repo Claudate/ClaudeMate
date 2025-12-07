@@ -100,5 +100,4 @@ test-github-sync.js
 build-output1/
 .trae/
 resources/
-scripts/test*.js
-scripts/test*.ts
+scripts/
