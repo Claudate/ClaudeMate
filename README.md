@@ -2,34 +2,6 @@
 
 A production-ready Electron + React + TypeScript application with focus on extensibility, memory safety, and performance.
 
-## 📚 文档导航
-
-**新手入门**:
-- 🚀 **[快速开始](./docs/QUICKSTART.md)** - 5分钟快速上手（推荐从这里开始）
-- 🔧 **[环境设置](./docs/SETUP.md)** - 完整的开发环境配置指南
-
-**核心文档**:
-- 📖 **本文档 (README.md)** - 项目功能、特性和API参考
-- 🏗️ **[架构设计](./docs/ARCHITECTURE.md)** - 系统架构和设计决策
-- 💻 **[实现指南](./docs/IMPLEMENTATION_GUIDE.md)** - 功能开发步骤
-
-**专题文档**:
-- 🗃️ **[IndexedDB 集成](./docs/INDEXEDDB_INTEGRATION.md)** - 数据库集成说明
-- 🤖 **[Claude CLI 参考](./docs/CLAUDE_CLI_REFERENCE.md)** - AI集成技术参考
-- 🎨 **[前端集成指南](./docs/FRONTEND_INTEGRATION_GUIDE.md)** - 前端开发指南
-- 📑 **[文档中心](./docs/README.md)** - 完整的文档索引和导航
-
-**重构文档** ⭐:
-- 🔄 **[ChatHistory 重构总结](./docs/CHATHISTORY_REFACTORING_FINAL_SUMMARY.md)** - Phase 4 完整重构记录
-- 📋 **[重构计划](./docs/CHATHISTORY_COMPONENT_REFACTORING_PLAN.md)** - 模块化重构方案
-- 🧪 **[功能测试清单](./docs/CHATHISTORY_FUNCTIONAL_TEST_CHECKLIST.md)** - 55项测试用例
-- 📊 **[性能对比分析](./docs/CHATHISTORY_PERFORMANCE_ANALYSIS.md)** - 重构前后性能对比
-
-**脚本工具**:
-- 🔧 **[脚本说明](./scripts/README.md)** - 开发和构建脚本使用指南
-
----
-
 ## 🏗️ Architecture Overview
 
 ### Core Principles
@@ -87,8 +59,7 @@ claude-skills-app/
 │
 ├── dist/                       # Build output
 ├── release/                    # Packaged apps
-└── docs/                       # Documentation
-
+└── scripts/                    # Build and maintenance scripts
 ```
 
 ## 🚀 Key Features
@@ -188,7 +159,6 @@ Full VSCode theme support:
 ### Install Dependencies
 
 ```bash
-cd H:/Electron/claudate
 npm install
 ```
 
@@ -214,6 +184,21 @@ npm run build
 
 # Package app
 npm run package
+```
+
+### Release
+
+To upload a release to GitHub (requires GitHub Token):
+
+```bash
+# 1. Set GitHub Token
+set GITHUB_TOKEN=your_token
+
+# 2. Run upload script (uploads to GitHub Releases)
+node scripts/upload-release.js <owner/repo> [tag]
+
+# Example
+node scripts/upload-release.js jackySun521/claudate v1.0.0
 ```
 
 ## 🔒 Security Features
