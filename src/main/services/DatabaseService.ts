@@ -7,6 +7,7 @@ import { app } from 'electron';
 import { join } from 'path';
 import { Logger } from '../utils/Logger';
 import type { WorkflowDefinition } from '../workflow/types';
+import type { GitHubSyncConfig, GitHubSyncHistory } from '@shared/types/domain.types';
 
 const logger = Logger.getInstance('DatabaseService');
 
@@ -41,12 +42,15 @@ export interface AppSettings {
   autoSave: boolean;
   notifications: boolean;
   telemetry: boolean;
+  // 🆕 GitHub 同步配置
+  github?: GitHubSyncConfig;
 }
 
 interface DatabaseSchema {
   sessions: ChatSession[];
   projects: Project[];
   workflows: WorkflowDefinition[]; // ⭐ 新增工作流存储
+  githubSyncHistory: GitHubSyncHistory[]; // 🆕 GitHub 同步历史
   settings: AppSettings;
   version: string;
 }
@@ -55,6 +59,7 @@ const defaultData: DatabaseSchema = {
   sessions: [],
   projects: [],
   workflows: [], // ⭐ 默认空工作流列表
+  githubSyncHistory: [], // 🆕 默认空同步历史
   settings: {
     theme: 'dark',
     language: 'en',
@@ -227,6 +232,109 @@ export class DatabaseService {
     this.db!.data.workflows = this.db!.data.workflows.filter((w: WorkflowDefinition) => w.id !== id);
     await this.db?.write();
     logger.info(`Workflow deleted: ${id}`);
+  }
+
+  // ⭐ Get workflows by project path
+  public async getWorkflowsByProject(projectPath: string): Promise<WorkflowDefinition[]> {
+    await this.db?.read();
+    return this.db?.data.workflows.filter((w: WorkflowDefinition) => w.projectPath === projectPath) || [];
+  }
+
+  // 🆕 GitHub Sync History operations
+
+  /**
+   * 保存同步历史
+   * commitSha 作为主键，确保不重复
+   */
+  public async saveSyncHistory(history: GitHubSyncHistory): Promise<void> {
+    await this.db?.read();
+    if (!this.db!.data.githubSyncHistory) {
+      this.db!.data.githubSyncHistory = [];
+    }
+
+    // 检查是否已存在（防止重复）
+    const existingIndex = this.db!.data.githubSyncHistory.findIndex(
+      (h: GitHubSyncHistory) => h.commitSha === history.commitSha
+    );
+
+    if (existingIndex >= 0) {
+      // 如果已存在，更新记录
+      this.db!.data.githubSyncHistory[existingIndex] = history;
+      logger.warn(`[DatabaseService] 更新已存在的同步历史: ${history.commitSha}`);
+    } else {
+      // 新增记录
+      this.db!.data.githubSyncHistory.push(history);
+    }
+
+    await this.db?.write();
+    logger.info(`[DatabaseService] Sync history saved: ${history.commitSha}`);
+  }
+
+  /**
+   * 获取所有同步历史（按时间倒序）
+   */
+  public async getAllSyncHistory(): Promise<GitHubSyncHistory[]> {
+    await this.db?.read();
+    const history = this.db?.data.githubSyncHistory || [];
+    // 按时间戳降序排列（最新的在前）
+    return history.sort((a: GitHubSyncHistory, b: GitHubSyncHistory) => b.timestamp - a.timestamp);
+  }
+
+  /**
+   * 根据项目获取同步历史（按时间倒序）
+   */
+  public async getSyncHistoryByProject(projectPath: string): Promise<GitHubSyncHistory[]> {
+    await this.db?.read();
+    const history = this.db?.data.githubSyncHistory?.filter(
+      (h: GitHubSyncHistory) => h.projectPath === projectPath
+    ) || [];
+    return history.sort((a: GitHubSyncHistory, b: GitHubSyncHistory) => b.timestamp - a.timestamp);
+  }
+
+  /**
+   * 根据 commit SHA 获取同步历史
+   * commitSha 是主键，直接查找
+   */
+  public async getSyncHistoryByCommit(commitSha: string): Promise<GitHubSyncHistory | null> {
+    await this.db?.read();
+    return this.db?.data.githubSyncHistory?.find(
+      (h: GitHubSyncHistory) => h.commitSha === commitSha
+    ) || null;
+  }
+
+  /**
+   * 🆕 删除同步历史（用于清理旧记录）
+   */
+  public async deleteSyncHistory(commitSha: string): Promise<void> {
+    await this.db?.read();
+    this.db!.data.githubSyncHistory = this.db!.data.githubSyncHistory?.filter(
+      (h: GitHubSyncHistory) => h.commitSha !== commitSha
+    ) || [];
+    await this.db?.write();
+    logger.info(`[DatabaseService] Sync history deleted: ${commitSha}`);
+  }
+
+  /**
+   * 🆕 清理旧的同步历史（保留最近 N 条）
+   */
+  public async cleanupOldSyncHistory(keepCount: number = 100): Promise<number> {
+    await this.db?.read();
+    const allHistory = this.db?.data.githubSyncHistory || [];
+
+    if (allHistory.length <= keepCount) {
+      return 0; // 无需清理
+    }
+
+    // 按时间戳排序，保留最新的 N 条
+    const sorted = allHistory.sort((a: GitHubSyncHistory, b: GitHubSyncHistory) => b.timestamp - a.timestamp);
+    const toKeep = sorted.slice(0, keepCount);
+    const deletedCount = allHistory.length - keepCount;
+
+    this.db!.data.githubSyncHistory = toKeep;
+    await this.db?.write();
+
+    logger.info(`[DatabaseService] 清理了 ${deletedCount} 条旧同步历史`);
+    return deletedCount;
   }
 
   // Cleanup

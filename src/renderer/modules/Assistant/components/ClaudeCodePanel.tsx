@@ -7,7 +7,7 @@
  */
 
 import { useRef, useEffect, useState } from 'react';
-import { useChatStore } from '../../../stores/chatStore';
+import { useChatStore, Message } from '../../../stores/chatStore';
 import { useProjectStore } from '../../../stores/projectStore';
 import { useTerminalStore } from '../../../stores/terminalStore';
 import {
@@ -22,7 +22,9 @@ import {
   toolApprovalManager,
 } from '../../../services/toolApprovalService';
 import { ToolApprovalDialog } from '../../../components/ToolApprovalDialog';
+import { SyncStatusBar } from '../../../components/github/SyncStatusBar';
 import { IPCChannels } from '@shared/types/ipc.types';
+import claudeLogo from '../../../assets/claude_logo.png';
 
 interface ClaudeCodePanelProps {
   // 可以传入其他配置
@@ -31,19 +33,9 @@ interface ClaudeCodePanelProps {
 // URL 检测正则
 const URL_REGEX = /(https?:\/\/[^\s]+)/g;
 
-// 格式化持续时间（毫秒 -> 可读格式）
-function formatDuration(ms: number): string {
-  const seconds = Math.floor(ms / 1000);
-  const minutes = Math.floor(seconds / 60);
-  const hours = Math.floor(minutes / 60);
-
-  if (hours > 0) {
-    return `${hours}h ${minutes % 60}m ${seconds % 60}s`;
-  } else if (minutes > 0) {
-    return `${minutes}m ${seconds % 60}s`;
-  } else {
-    return `${seconds}s`;
-  }
+// 格式化消息持续时间（毫秒 -> 秒，保留2位小数）
+function formatMessageDuration(ms: number): string {
+  return `${(ms / 1000).toFixed(2)}s`;
 }
 
 // 格式化文件大小（字节 -> 可读格式）
@@ -58,10 +50,15 @@ function formatFileSize(bytes: number): string {
 }
 
 // 格式化 Token 使用量（参照 WPF 的 TokenUsage.DisplayText）
-function formatTokenUsage(tokenUsage: any): string {
+function formatTokenUsage(tokenUsage: any, duration?: number): string {
   if (!tokenUsage) return '';
 
   const parts: string[] = [];
+
+  // ⭐ 会话时间（如果提供）
+  if (duration !== undefined && duration > 0) {
+    parts.push(`⏱ ${formatMessageDuration(duration)}`);
+  }
 
   // 基础信息：总量 (输入 + 输出)
   parts.push(`Total: ${tokenUsage.totalTokens.toLocaleString()}`);
@@ -104,35 +101,63 @@ function renderTextWithLinks(text: string): JSX.Element[] {
   });
 }
 
-// ⭐⭐⭐ 图片附件接口
-interface ImageAttachment {
+// ⭐⭐⭐ 文件附件接口（支持图片和其他文件）
+interface FileAttachment {
   id: string;
   dataUrl: string;  // base64 data URL
   name: string;
   mimeType: string;
+  size: number;
+  isImage: boolean;  // 是否是图片
 }
 
 export function ClaudeCodePanel({}: ClaudeCodePanelProps) {
-  const { messages, isLoading, error, sendMessage, clearMessages, getSessionStats, currentSessionId, pendingInput, clearPendingInput } = useChatStore();
+  const { messages, isLoading, error, sendMessage, clearMessages, getSessionStats, currentSessionId, pendingInput, clearPendingInput, cancelSession } = useChatStore();
   const { currentProject } = useProjectStore();
   const terminalStore = useTerminalStore();
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const [inputValue, setInputValue] = useState('');
   const [copiedMessageId, setCopiedMessageId] = useState<number | null>(null);
   const [showStats, setShowStats] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; messageIndex: number; content: string } | null>(null);
 
-  // ⭐⭐⭐ 图片附件状态
-  const [attachedImages, setAttachedImages] = useState<ImageAttachment[]>([]);
+  // ⭐⭐⭐ 文件附件状态（支持图片和其他文件）
+  const [attachedFiles, setAttachedFiles] = useState<FileAttachment[]>([]);
+
+  // ⭐ 输入框状态
+  const [inputValue, setInputValue] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // ⭐⭐⭐ 斜杠命令状态
+  const [showSlashMenu, setShowSlashMenu] = useState(false);
+  const [slashCommands] = useState([
+    { command: '/help', description: '显示所有可用的斜杠命令' },
+    { command: '/clear', description: '清空当前上下文，重置对话' },
+    { command: '/compact', description: '压缩对话历史，创建摘要并保留关键信息' },
+    { command: '/init', description: '初始化项目，生成 Claude.md 文件' },
+    { command: '/rewind', description: '回退到之前的对话状态' },
+    { command: '/context', description: '查看当前 token 使用情况' },
+    { command: '/permissions', description: '打开权限设置' },
+    { command: '/hooks', description: '配置生命周期钩子' },
+    { command: '/model', description: '切换 Claude 模型 (sonnet/opus/haiku)' },
+    { command: '/config', description: '打开配置设置' },
+    { command: '/install-github-app', description: '安装 GitHub PR 审查应用' },
+  ]);
 
   // ⭐⭐⭐ 监听 pendingInput 变化，自动更新输入框
   useEffect(() => {
     if (pendingInput) {
       setInputValue((prev) => (prev ? `${prev}\n\n${pendingInput}` : pendingInput));
       clearPendingInput();
+      // 调整textarea高度
+      setTimeout(() => {
+        if (textareaRef.current) {
+          textareaRef.current.style.height = '60px';
+          textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`;
+        }
+      }, 0);
     }
-  }, [pendingInput, clearPendingInput]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingInput]);
 
   // 浮动复制按钮状态
   const [floatingButton, setFloatingButton] = useState<{
@@ -156,6 +181,7 @@ export function ClaudeCodePanel({}: ClaudeCodePanelProps) {
 
   // 会话取消状态
   const [showCancelTip, setShowCancelTip] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);  // ⭐ 暂停状态
 
   // 获取当前会话的元数据
   const currentSessionMetadata = currentProject && terminalStore?.getAllSessions
@@ -241,128 +267,184 @@ export function ClaudeCodePanel({}: ClaudeCodePanelProps) {
     }
   };
 
-  // ⭐⭐⭐ 处理图片粘贴
-  const handlePaste = async (e: React.ClipboardEvent) => {
-    const items = e.clipboardData?.items;
-    if (!items) return;
-
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i];
-      if (item.type.indexOf('image') !== -1) {
-        e.preventDefault(); // 防止粘贴默认行为
-
-        const file = item.getAsFile();
-        if (!file) continue;
-
-        // 转换为 base64
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          const dataUrl = event.target?.result as string;
-          const newImage: ImageAttachment = {
-            id: `img-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-            dataUrl,
-            name: `pasted-image-${Date.now()}.png`,
-            mimeType: file.type || 'image/png',
-          };
-          setAttachedImages((prev) => [...prev, newImage]);
-        };
-        reader.readAsDataURL(file);
-      }
-    }
+  // ⭐⭐⭐ 移除文件
+  const handleRemoveFile = (fileId: string) => {
+    setAttachedFiles((prev) => prev.filter((file) => file.id !== fileId));
   };
 
-  // ⭐⭐⭐ 移除图片
-  const handleRemoveImage = (imageId: string) => {
-    setAttachedImages((prev) => prev.filter((img) => img.id !== imageId));
-  };
-
-  // ⭐⭐⭐ 处理图片文件选择
-  const handleImageFileSelect = async () => {
+  // ⭐⭐⭐ 处理文件选择（支持图片和其他文件）
+  const handleFileSelect = async () => {
     try {
-      const result = await window.electronAPI.invoke('dialog:open-file', {
+      const dialogParams = {
         filters: [
-          { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp'] }
+          { name: 'All Files (*.*)', extensions: ['*'] },
+          { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'] },
+          { name: 'Documents', extensions: ['pdf', 'doc', 'docx', 'txt', 'md'] },
+          { name: 'Code Files', extensions: ['js', 'ts', 'tsx', 'jsx', 'py', 'java', 'cpp', 'c', 'h', 'cs', 'go', 'rb'] }
         ],
-        properties: ['openFile', 'multiSelections']
-      });
+        properties: ['openFile', 'multiSelections'],
+        defaultPath: undefined,
+        filterIndex: 0  // 明确指定默认选择第一个过滤器（All Files）
+      };
+
+      console.log('[ClaudeCodePanel] 🔍 准备打开文件对话框，参数:', dialogParams);
+
+      const result = await window.electronAPI.invoke('dialog:open-file', dialogParams);
 
       if (!result.canceled && result.filePaths && result.filePaths.length > 0) {
-        // 读取选中的图片文件
+        // 读取选中的文件
         for (const filePath of result.filePaths) {
           const fileData = await window.electronAPI.invoke(IPCChannels.FS_READ_FILE, {
             path: filePath,
             encoding: 'base64'
           });
 
-          const fileName = filePath.split(/[\\/]/).pop() || 'image.png';
-          const ext = fileName.split('.').pop()?.toLowerCase() || 'png';
-          const mimeType = `image/${ext === 'jpg' ? 'jpeg' : ext}`;
+          const fileName = filePath.split(/[\\/]/).pop() || 'file';
+          const ext = fileName.split('.').pop()?.toLowerCase() || '';
 
-          const newImage: ImageAttachment = {
-            id: `img-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          // 判断是否是图片
+          const imageExtensions = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'];
+          const isImage = imageExtensions.includes(ext);
+
+          // 确定 MIME 类型
+          let mimeType = 'application/octet-stream';
+          if (isImage) {
+            mimeType = `image/${ext === 'jpg' ? 'jpeg' : ext}`;
+          } else if (ext === 'pdf') {
+            mimeType = 'application/pdf';
+          } else if (ext === 'txt' || ext === 'md') {
+            mimeType = 'text/plain';
+          }
+
+          // 获取文件大小（通过 base64 长度估算）
+          const size = Math.round((fileData.content.length * 3) / 4);
+
+          const newFile: FileAttachment = {
+            id: `file-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
             dataUrl: `data:${mimeType};base64,${fileData.content}`,
             name: fileName,
             mimeType,
+            size,
+            isImage,
           };
-          setAttachedImages((prev) => [...prev, newImage]);
+          setAttachedFiles((prev) => [...prev, newFile]);
         }
       }
     } catch (error) {
-      console.error('[ClaudeCodePanel] 选择图片失败:', error);
+      console.error('[ClaudeCodePanel] 选择文件失败:', error);
     }
+  };
+
+  // ⭐⭐⭐ 处理特殊本地命令（/clear）
+  // 其他斜杠命令直接透传给 Claude CLI 处理
+  const handleLocalCommand = (commandText: string): boolean => {
+    if (commandText === '/clear') {
+      clearMessages();
+      return true;
+    }
+    return false;
   };
 
   const handleSend = async () => {
-    // ⭐⭐⭐ 验证：图片必须配合文字
-    if (attachedImages.length > 0 && !inputValue.trim()) {
-      alert('图片必须配合文字一起发送，不能只发送图片！');
+    // ⭐⭐⭐ 验证：文件必须配合文字
+    if (attachedFiles.length > 0 && !inputValue.trim()) {
+      alert('Files must be sent with text message!');
       return;
     }
 
-    if (inputValue.trim() || attachedImages.length > 0) {
+    if (inputValue.trim() || attachedFiles.length > 0) {
+      const message = inputValue.trim();
+
+      // ⭐ 检查是否是本地命令（只有 /clear）
+      if (message.startsWith('/')) {
+        const handled = handleLocalCommand(message);
+        if (handled) {
+          // 本地命令已处理（如清空对话）
+          setInputValue('');
+          setShowSlashMenu(false);
+          if (textareaRef.current) {
+            textareaRef.current.style.height = '60px';
+          }
+          return;
+        }
+        // 其他斜杠命令继续透传给 Claude CLI
+      }
+
       // 构建消息内容
       let messageContent: string | any[];
 
-      if (attachedImages.length > 0) {
-        // 多模态消息格式
-        messageContent = [
-          { type: 'text', text: inputValue },
-          ...attachedImages.map((img) => ({
-            type: 'image',
-            source: {
-              type: 'base64',
-              media_type: img.mimeType,
-              data: img.dataUrl.split(',')[1], // 去掉 data:image/png;base64, 前缀
-            },
-          })),
-        ];
+      if (attachedFiles.length > 0) {
+        // 多模态消息格式（支持图片和文档）
+        const contentBlocks: any[] = [{ type: 'text', text: message }];
+
+        for (const file of attachedFiles) {
+          if (file.isImage) {
+            // 图片类型
+            contentBlocks.push({
+              type: 'image',
+              source: {
+                type: 'base64',
+                media_type: file.mimeType,
+                data: file.dataUrl.split(',')[1], // 去掉 data:image/png;base64, 前缀
+              },
+            });
+          } else {
+            // 文档类型
+            contentBlocks.push({
+              type: 'document',
+              source: {
+                type: 'base64',
+                media_type: file.mimeType,
+                data: file.dataUrl.split(',')[1],
+              },
+              cache_control: { type: 'ephemeral' },
+            });
+          }
+        }
+
+        messageContent = contentBlocks;
       } else {
         // 纯文本消息
-        messageContent = inputValue;
+        messageContent = message;
       }
 
       await sendMessage(messageContent);
-      setInputValue('');
-      setAttachedImages([]); // 清空图片
-    }
-  };
+      setInputValue(''); // 清空输入
+      setAttachedFiles([]); // 清空文件
+      setShowSlashMenu(false); // 关闭斜杠菜单
+      setIsPaused(false); // ⭐ 重置暂停状态
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
+      // 重置 textarea 高度
+      if (textareaRef.current) {
+        textareaRef.current.style.height = '60px';
+      }
     }
   };
 
   // 取消当前会话
   const handleCancelSession = async () => {
+    // 立即设置暂停状态，提供即时视觉反馈
+    setIsPaused(true);
+
     try {
+      // ⭐ 立即重置 isLoading 状态，防止显示"正在回复"
+      cancelSession();
+
       await window.electronAPI.invoke(IPCChannels.CLAUDE_CANCEL, { sessionId: currentSessionId });
       setShowCancelTip(true);
       setTimeout(() => setShowCancelTip(false), 2000);
       console.log('[ClaudeCodePanel] 会话已取消');
+
+      // 3秒后自动恢复暂停状态显示
+      setTimeout(() => {
+        setIsPaused(false);
+      }, 3000);
     } catch (error) {
       console.error('[ClaudeCodePanel] 取消会话失败:', error);
+      // 如果暂停失败，立即恢复状态
+      setIsPaused(false);
+      // 也要重置 loading 状态
+      cancelSession();
     }
   };
 
@@ -373,6 +455,81 @@ export function ClaudeCodePanel({}: ClaudeCodePanelProps) {
       setTimeout(() => setCopiedMessageId(null), 2000);
     } catch (err) {
       console.error('Failed to copy:', err);
+    }
+  };
+
+  // ⭐⭐⭐ 处理输入框变化
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const value = e.target.value;
+    console.log('[ClaudeCodePanel] 输入变化:', value);
+    setInputValue(value);
+
+    // 检测斜杠命令 - 只要以/开头且长度小于20就显示菜单
+    const shouldShowMenu = value.startsWith('/') && value.length < 20 && value.indexOf('\n') === -1;
+    console.log('[ClaudeCodePanel] 斜杠菜单状态:', { value, shouldShowMenu });
+    setShowSlashMenu(shouldShowMenu);
+
+    // Auto-resize textarea
+    const textarea = e.target;
+    textarea.style.height = '60px';
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
+  };
+
+  // ⭐⭐⭐ 处理键盘事件
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // ESC键关闭斜杠菜单
+    if (e.key === 'Escape' && showSlashMenu) {
+      e.preventDefault();
+      setShowSlashMenu(false);
+      return;
+    }
+
+    // Enter键发送消息
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
+    }
+  };
+
+  // ⭐⭐⭐ 处理斜杠命令选择
+  const handleSlashCommand = (command: string) => {
+    setInputValue(command + ' ');
+    setShowSlashMenu(false);
+    textareaRef.current?.focus();
+  };
+
+  // ⭐⭐⭐ 处理文件粘贴（图片）
+  const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.type.startsWith('image/')) {
+        e.preventDefault();
+        const file = item.getAsFile();
+        if (file) {
+          try {
+            const reader = new FileReader();
+            reader.onload = (event) => {
+              const dataUrl = event.target?.result as string;
+              const newFile: FileAttachment = {
+                id: `${Date.now()}-${Math.random()}`,
+                dataUrl,
+                name: `pasted-image-${Date.now()}.png`,
+                mimeType: file.type,
+                size: file.size,
+                isImage: true,
+              };
+              setAttachedFiles((prev) => [...prev, newFile]);
+            };
+            reader.readAsDataURL(file);
+          } catch (error) {
+            console.error('[ClaudeCodePanel] 粘贴图片失败:', error);
+          }
+        }
+        break;
+      }
     }
   };
 
@@ -538,7 +695,7 @@ export function ClaudeCodePanel({}: ClaudeCodePanelProps) {
       <div className="flex items-center justify-between p-3 border-b border-vscode-border">
         <div className="flex items-center gap-2">
           <img
-            src="/resources/claude_logo.png"
+            src={claudeLogo}
             alt="Claude"
             className="w-6 h-6 rounded-sm"
           />
@@ -576,13 +733,6 @@ export function ClaudeCodePanel({}: ClaudeCodePanelProps) {
             <i className={`codicon ${isAuthenticated ? 'codicon-verified-filled' : 'codicon-lock'} text-sm`} />
           </button>
           <button
-            onClick={() => setShowStats(!showStats)}
-            className="p-1.5 hover:bg-vscode-selection-bg/20 rounded transition-colors"
-            title={showStats ? "隐藏会话统计" : "显示会话统计"}
-          >
-            <i className="codicon codicon-graph text-sm" />
-          </button>
-          <button
             onClick={clearMessages}
             className="p-1.5 hover:bg-vscode-selection-bg/20 rounded transition-colors"
             title="创建新会话（清空当前对话）"
@@ -616,11 +766,6 @@ export function ClaudeCodePanel({}: ClaudeCodePanelProps) {
                     <i className="codicon codicon-calendar text-blue-400" />
                     <span className="text-vscode-foreground-dim">开始时间:</span>
                     <span>{new Date(currentSessionMetadata.createdAt).toLocaleString('zh-CN')}</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <i className="codicon codicon-clock text-blue-400" />
-                    <span className="text-vscode-foreground-dim">持续时间:</span>
-                    <span>{formatDuration(currentSessionMetadata.duration)}</span>
                   </div>
                   <div className="flex items-center gap-1">
                     <i className="codicon codicon-symbol-constant text-blue-400" />
@@ -662,8 +807,8 @@ export function ClaudeCodePanel({}: ClaudeCodePanelProps) {
         </div>
       )}
 
-      {/* Error Banner */}
-      {error && !showAuthDialog && (
+      {/* Error Banner - ⭐ 暂停状态时不显示错误（避免显示"进程异常退出"等不友好的提示） */}
+      {error && !showAuthDialog && !isPaused && (
         <div className="bg-red-500/20 border-l-4 border-red-500 p-3 m-3">
           <div className="flex items-start gap-2">
             <i className="codicon codicon-error text-red-400 text-base mt-0.5" />
@@ -735,7 +880,7 @@ export function ClaudeCodePanel({}: ClaudeCodePanelProps) {
           <div className="h-full flex items-center justify-center text-vscode-foreground-dim">
             <div className="text-center max-w-xs">
               <img
-                src="/resources/claude_logo.png"
+                src={claudeLogo}
                 alt="Claude"
                 className="w-16 h-16 mx-auto mb-4 opacity-30"
               />
@@ -751,6 +896,15 @@ export function ClaudeCodePanel({}: ClaudeCodePanelProps) {
               const style = getMessageStyle(message.role as 'user' | 'assistant' | 'system');
               const isCopied = copiedMessageId === index;
 
+              // ⭐ 计算回复时间（当前 assistant 消息与上一条 user 消息的时间差）
+              let responseDuration: number | undefined;
+              if (message.role === 'assistant' && index > 0) {
+                const prevMessage = messages[index - 1];
+                if (prevMessage && prevMessage.role === 'user') {
+                  responseDuration = message.timestamp - prevMessage.timestamp;
+                }
+              }
+
               return (
                 <div
                   key={index}
@@ -761,7 +915,7 @@ export function ClaudeCodePanel({}: ClaudeCodePanelProps) {
                     <div className="flex items-center gap-2">
                       {message.role === 'assistant' ? (
                         <img
-                          src="/resources/claude_logo.png"
+                          src={claudeLogo}
                           alt="Claude"
                           className="w-4 h-4 rounded-sm"
                         />
@@ -805,7 +959,7 @@ export function ClaudeCodePanel({}: ClaudeCodePanelProps) {
                     <div className="mt-1.5 pl-6">
                       <div className="flex items-center gap-2 text-xs text-vscode-foreground-dim opacity-60">
                         <i className="codicon codicon-pulse" />
-                        <span className="font-mono">{formatTokenUsage(message.tokenUsage)}</span>
+                        <span className="font-mono">{formatTokenUsage(message.tokenUsage, responseDuration)}</span>
                       </div>
                     </div>
                   )}
@@ -816,125 +970,226 @@ export function ClaudeCodePanel({}: ClaudeCodePanelProps) {
           </>
         )}
 
-        {/* ⭐ 增强的Loading Indicator - 显示Claude正在处理的状态 */}
-        {isLoading && (
-          <div className="py-3 px-1 bg-vscode-input-bg/20 rounded-lg mx-1 mb-2">
-            <div className="flex items-center gap-2 mb-1.5">
-              <img
-                src="/resources/claude_logo.png"
-                alt="Claude"
-                className="w-4 h-4 rounded-sm animate-pulse"
-              />
-              <span className="text-xs font-semibold text-purple-400">Claude</span>
-              <span className="text-xs text-vscode-foreground-dim opacity-60">is typing...</span>
-            </div>
-            <div className="pl-6 flex items-center gap-2 text-vscode-foreground-dim">
-              <div className="flex gap-1">
-                <span className="w-1.5 h-1.5 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                <span className="w-1.5 h-1.5 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                <span className="w-1.5 h-1.5 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+        {/* ⭐⭐⭐ 增强的Loading Indicator - 更明显的"正在回复"状态指示器 */}
+        {isLoading && !isPaused && (
+          <div className="py-4 px-3 bg-gradient-to-r from-purple-500/10 to-blue-500/10 border border-purple-500/30 rounded-lg mx-1 mb-2 animate-pulse-slow">
+            <div className="flex items-center gap-3 mb-2">
+              <div className="relative">
+                <img
+                  src={claudeLogo}
+                  alt="Claude"
+                  className="w-6 h-6 rounded-sm"
+                />
+                <div className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-purple-500 rounded-full animate-ping" />
+                <div className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-purple-500 rounded-full" />
               </div>
-              <span className="text-xs">Processing your request...</span>
+              <div className="flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-semibold text-purple-300">Claude 正在回复</span>
+                  <div className="flex gap-1">
+                    <span className="w-1 h-1 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                    <span className="w-1 h-1 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                    <span className="w-1 h-1 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                  </div>
+                </div>
+                <p className="text-xs text-vscode-foreground-dim mt-0.5">正在分析您的问题并生成回复...</p>
+              </div>
+            </div>
+            {/* 进度条动画 */}
+            <div className="w-full h-0.5 bg-vscode-input-bg rounded-full overflow-hidden">
+              <div className="h-full bg-gradient-to-r from-purple-500 to-blue-500 animate-progress" />
+            </div>
+          </div>
+        )}
+
+        {/* ⭐ 暂停状态提示 */}
+        {isPaused && (
+          <div className="py-4 px-3 bg-gradient-to-r from-yellow-500/10 to-orange-500/10 border border-yellow-500/30 rounded-lg mx-1 mb-2">
+            <div className="flex items-center gap-3">
+              <div className="relative">
+                <img
+                  src={claudeLogo}
+                  alt="Claude"
+                  className="w-6 h-6 rounded-sm opacity-60"
+                />
+              </div>
+              <div className="flex-1">
+                <div className="flex items-center gap-2">
+                  <i className="codicon codicon-debug-pause text-yellow-400" />
+                  <span className="text-sm font-semibold text-yellow-300">回复已暂停</span>
+                </div>
+                <p className="text-xs text-vscode-foreground-dim mt-0.5">会话已取消，您可以继续发送新消息</p>
+              </div>
             </div>
           </div>
         )}
       </div>
 
-      {/* Input Area - 改进的设计 */}
-      <div className="border-t border-vscode-border bg-vscode-input-bg/30">
-        <div className="p-3">
-          <div className="flex flex-col gap-3">
-            {/* 顶部状态栏 */}
-            <div className="flex items-center justify-between text-xs">
-              <div className="flex items-center gap-3">
-                <div className="flex items-center gap-1.5 text-vscode-foreground-dim">
-                  <i className="codicon codicon-keyboard" />
-                  <span>Enter 发送 · Shift+Enter 换行</span>
-                </div>
-                {currentProject && (
-                  <div className="flex items-center gap-1.5 text-blue-400">
-                    <i className="codicon codicon-folder" />
-                    <span>{currentProject.name}</span>
-                  </div>
-                )}
-              </div>
-              <div className="flex items-center gap-1.5 text-vscode-foreground-dim">
-                <span className={approvalMode === 'auto' ? 'text-green-400' : 'text-yellow-400'}>
-                  {approvalMode === 'auto' ? '🔓 自动批准' : '🔒 手动确认'}
-                </span>
-              </div>
-            </div>
-
-            {/* ⭐⭐⭐ 图片预览区 */}
-            {attachedImages.length > 0 && (
-              <div className="flex flex-wrap gap-2 mb-2">
-                {attachedImages.map((img) => (
-                  <div
-                    key={img.id}
-                    className="relative group border border-vscode-border rounded-lg overflow-hidden"
-                  >
-                    <img
-                      src={img.dataUrl}
-                      alt={img.name}
-                      className="w-20 h-20 object-cover"
-                    />
-                    <button
-                      onClick={() => handleRemoveImage(img.id)}
-                      className="absolute top-1 right-1 bg-red-500 hover:bg-red-600 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity"
-                      title="移除图片"
-                    >
-                      <i className="codicon codicon-close text-xs" />
-                    </button>
-                    <div className="absolute bottom-0 left-0 right-0 bg-black/70 text-white text-xs px-1 py-0.5 truncate opacity-0 group-hover:opacity-100 transition-opacity">
-                      {img.name}
-                    </div>
-                  </div>
-                ))}
+      {/* Input Area - 输入区域 */}
+      <div className="relative border-t border-vscode-border bg-vscode-input-bg/30">
+        {/* 顶部状态栏 */}
+        <div className="flex items-center justify-between text-xs px-4 pt-3">
+          <div className="flex items-center gap-3">
+            {currentProject && (
+              <div className="flex items-center gap-1.5 text-blue-400">
+                <i className="codicon codicon-folder" />
+                <span>{currentProject.name}</span>
               </div>
             )}
+          </div>
+          <div className="flex items-center gap-1.5 text-vscode-foreground-dim">
+            <span className={approvalMode === 'auto' ? 'text-green-400' : 'text-yellow-400'}>
+              {approvalMode === 'auto' ? '🔓 自动批准' : '🔒 手动确认'}
+            </span>
+          </div>
+        </div>
 
-            {/* Text Area */}
-            <textarea
-              ref={textareaRef}
-              value={inputValue}
-              onChange={(e) => setInputValue(e.target.value)}
-              onKeyDown={handleKeyDown}
-              onPaste={handlePaste}
-              placeholder={attachedImages.length > 0 ? "添加文字描述（必填）..." : "向 Claude 提问..."}
-              className="w-full bg-vscode-input-bg text-vscode-foreground border-2 border-vscode-input-border rounded-lg px-4 py-3 text-sm resize-none focus:outline-none focus:border-vscode-accent transition-colors shadow-sm"
-              rows={3}
-            />
-
-            {/* 底部按钮区 */}
-            <div className="flex items-center justify-between">
-              {/* 左侧：工具按钮 */}
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={handleImageFileSelect}
-                  className="p-2 hover:bg-vscode-selection-bg/20 rounded transition-colors"
-                  title="选择图片文件"
-                >
-                  <i className="codicon codicon-file-media text-lg" />
-                </button>
-                {attachedImages.length > 0 && (
-                  <span className="text-xs text-vscode-foreground-dim">
-                    {attachedImages.length} 张图片
-                  </span>
+        {/* ⭐⭐⭐ 文件预览区 */}
+        {attachedFiles.length > 0 && (
+          <div className="flex flex-wrap gap-2 px-4 pt-2">
+            {attachedFiles.map((file) => (
+              <div
+                key={file.id}
+                className="relative group border border-vscode-border rounded-lg overflow-hidden"
+              >
+                {file.isImage ? (
+                  <img
+                    src={file.dataUrl}
+                    alt={file.name}
+                    className="w-20 h-20 object-cover"
+                  />
+                ) : (
+                  <div className="w-20 h-20 bg-vscode-input-bg flex flex-col items-center justify-center p-2">
+                    <i className="codicon codicon-file text-2xl text-vscode-accent mb-1" />
+                    <span className="text-[8px] text-center text-vscode-foreground-dim truncate w-full px-1">
+                      {file.name}
+                    </span>
+                  </div>
                 )}
+                <button
+                  onClick={() => handleRemoveFile(file.id)}
+                  className="absolute top-1 right-1 bg-red-500 hover:bg-red-600 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                  title="Remove file"
+                >
+                  <i className="codicon codicon-close text-xs" />
+                </button>
+                <div className="absolute bottom-0 left-0 right-0 bg-black/70 text-white text-xs px-1 py-0.5 truncate opacity-0 group-hover:opacity-100 transition-opacity">
+                  {file.name} ({(file.size / 1024).toFixed(1)}KB)
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* ⭐⭐⭐ 斜杠命令菜单 */}
+        {showSlashMenu && (
+          <div className="absolute bottom-full left-4 right-4 mb-2 bg-vscode-menu-bg border-2 border-vscode-accent rounded-lg shadow-2xl py-2 max-h-[400px] overflow-y-auto z-[100]">
+            <div className="px-3 py-2 text-xs text-vscode-accent font-semibold border-b border-vscode-border mb-1 flex items-center gap-2">
+              <i className="codicon codicon-symbol-keyword" />
+              斜杠命令 (Slash Commands)
+            </div>
+            {slashCommands
+              .filter(cmd => {
+                // 如果只输入了 "/"，显示所有命令
+                if (inputValue === '/') return true;
+                // 否则过滤匹配的命令
+                return cmd.command.toLowerCase().includes(inputValue.toLowerCase());
+              })
+              .map((cmd, index) => (
+                <button
+                  key={index}
+                  onClick={() => handleSlashCommand(cmd.command)}
+                  className="w-full px-3 py-2 text-left hover:bg-vscode-accent/20 active:bg-vscode-accent/30 flex flex-col gap-1 transition-colors"
+                >
+                  <code className="text-vscode-accent font-mono text-sm font-bold">{cmd.command}</code>
+                  <span className="text-xs text-vscode-foreground-dim leading-relaxed">{cmd.description}</span>
+                </button>
+              ))}
+            {slashCommands.filter(cmd => {
+              if (inputValue === '/') return true;
+              return cmd.command.toLowerCase().includes(inputValue.toLowerCase());
+            }).length === 0 && (
+              <div className="px-3 py-4 text-center text-vscode-foreground-dim text-xs">
+                没有匹配的命令
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* 输入框区域 */}
+        <div className="border-t border-vscode-border bg-vscode-sidebar-bg">
+          <div className="p-3">
+            <div className="flex gap-3 items-end">
+              {/* 左侧：文件附件按钮 */}
+              <button
+                onClick={handleFileSelect}
+                className="p-2.5 hover:bg-vscode-selection-bg/30 rounded-md transition-all flex-shrink-0 self-end mb-[26px]"
+                title="Attach files (images, documents, code)"
+              >
+                <i className="codicon codicon-attach text-base opacity-80 hover:opacity-100" />
+              </button>
+
+              {/* 中间：输入框 */}
+              <div className="flex-1 flex flex-col gap-1.5">
+                <textarea
+                  ref={textareaRef}
+                  value={inputValue}
+                  onChange={handleInputChange}
+                  onKeyDown={handleKeyDown}
+                  onPaste={handlePaste}
+                  placeholder="Type your message..."
+                  className="w-full px-3 py-2.5 bg-vscode-input-bg text-vscode-foreground border border-vscode-input-border rounded-md focus:outline-none focus:border-vscode-accent focus:ring-1 focus:ring-vscode-accent/50 transition-all min-h-[60px] max-h-[200px] resize-none placeholder:text-vscode-foreground-dim/50"
+                  rows={2}
+                />
+                <div className="text-xs text-vscode-foreground-dim/70 px-1 flex items-center gap-1.5">
+                  {isPaused ? (
+                    <>
+                      <i className="codicon codicon-debug-stop text-yellow-400" />
+                      <span className="text-yellow-400">Paused</span>
+                    </>
+                  ) : isLoading ? (
+                    <>
+                      <i className="codicon codicon-loading codicon-modifier-spin" />
+                      <span>Claude is responding...</span>
+                    </>
+                  ) : (
+                    <>
+                      <i className="codicon codicon-info" />
+                      <span>Shift+Enter for new line • Ctrl+V to paste image • Click button to attach files</span>
+                    </>
+                  )}
+                </div>
               </div>
 
-              {/* 右侧：发送按钮 */}
+              {/* 右侧：发送/暂停按钮 */}
               <button
-                onClick={handleSend}
-                disabled={!inputValue.trim() && attachedImages.length === 0}
-                className="px-6 py-2 bg-vscode-accent hover:bg-vscode-accent/80 disabled:bg-vscode-input-border disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-sm font-medium transition-all flex items-center gap-2 shadow-sm"
+                onClick={isLoading ? handleCancelSession : handleSend}
+                disabled={!isLoading && !inputValue.trim() && attachedFiles.length === 0}
+                className={`p-3 rounded-md flex-shrink-0 self-end mb-[26px] transition-all ${
+                  isLoading
+                    ? 'bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-300 border border-yellow-500/50'
+                    : 'bg-vscode-button-bg hover:bg-vscode-button-hover-bg text-vscode-button-fg border border-vscode-button-border disabled:opacity-40 disabled:cursor-not-allowed'
+                }`}
               >
-                <i className="codicon codicon-send" />
-                <span>发送</span>
+                {isPaused ? (
+                  <i className="codicon codicon-debug-stop text-lg" />
+                ) : isLoading ? (
+                  <i className="codicon codicon-debug-pause text-lg" />
+                ) : (
+                  <i className="codicon codicon-send text-lg" />
+                )}
               </button>
             </div>
           </div>
         </div>
+
+        {/* GitHub Sync Status Bar */}
+        {currentProject?.path && (
+          <SyncStatusBar
+            projectPath={currentProject.path}
+            sessionId={currentSessionId}
+          />
+        )}
       </div>
 
       {/* Tool Approval Dialog (参照 WPF 的 FilePermissionDialog) */}

@@ -33,8 +33,17 @@ export class WindowManager {
     this.logger.info('Creating main window...');
 
     // 获取图标路径
-    const iconPath = join(__dirname, '../../resources/icon.png');
-    this.logger.debug(`Icon path: ${iconPath}`);
+    // 在打包后，资源文件位于 resources/app.asar 外的 resources 目录
+    // 使用 process.resourcesPath 获取正确的资源路径
+    let iconPath: string;
+    if (app.isPackaged) {
+      // 打包后: 图标在 resources/logo256256.PNG
+      iconPath = join(process.resourcesPath, 'logo256256.PNG');
+    } else {
+      // 开发环境: 图标在项目根目录的 resources 文件夹
+      iconPath = join(__dirname, '../../resources/logo256256.PNG');
+    }
+    this.logger.info(`Icon path: ${iconPath}`);
 
     // 创建浏览器窗口
     this.mainWindow = new BrowserWindow({
@@ -59,12 +68,22 @@ export class WindowManager {
 
     this.logger.info('BrowserWindow created successfully');
 
+    // ⭐⭐⭐ 设置 FileSystemService 的 mainWindow 引用（用于文件变化事件）
+    const { FileSystemService } = require('../services/FileSystemService');
+    FileSystemService.getInstance().setMainWindow(this.mainWindow);
+
     // 加载渲染进程
     if (app.isPackaged) {
       // 生产环境:使用file协议加载打包后的文件
-      const appPath = join(__dirname, '../renderer/index.html');
-      this.logger.debug(`Loading renderer file: ${appPath}`);
-      this.mainWindow.loadFile(appPath);
+      // __dirname 在打包后指向 app.asar/dist/main/managers
+      // 渲染器文件在 app.asar/dist/renderer/index.html
+      // 从 dist/main/managers 到 dist/renderer: ../../renderer
+      const rendererPath = join(__dirname, '..', '..', 'renderer', 'index.html');
+      this.logger.info(`Loading packaged renderer from: ${rendererPath}`);
+      this.logger.info(`__dirname: ${__dirname}`);
+      this.logger.info(`app.getAppPath(): ${app.getAppPath()}`);
+
+      await this.mainWindow.loadFile(rendererPath);
     } else {
       // 开发环境:连接 Vite 开发服务器
       const url = 'http://localhost:5173';

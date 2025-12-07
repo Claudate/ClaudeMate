@@ -168,10 +168,20 @@ export function FileViewerPanel({ currentFile }: FileViewerPanelProps) {
     console.log('[FileViewer] Starting file load from disk');
 
     try {
-      const result = await window.electronAPI.invoke<{ content: string }>(
-        IPCChannels.FS_READ_FILE,
-        { path: filePath, encoding: 'utf8' }
-      );
+      // ⭐⭐⭐ 添加错误处理包装，防止加载大文件卡死
+      let result: { content: string } | null = null;
+
+      try {
+        result = await window.electronAPI.invoke<{ content: string }>(
+          IPCChannels.FS_READ_FILE,
+          { path: filePath, encoding: 'utf8' }
+        );
+      } catch (readError) {
+        console.error('[FileViewer] Failed to read file:', readError);
+        alert(`无法读取文件: ${fileName}\n\n错误: ${readError instanceof Error ? readError.message : '未知错误'}`);
+        setLoading(false);
+        return;
+      }
 
       if (result) {
         const ext = fileName.split('.').pop()?.toLowerCase() || '';

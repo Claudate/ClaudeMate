@@ -9,10 +9,6 @@ import { immer } from 'zustand/middleware/immer';
 import { ChatSessionMetadata, ChatSession, SessionStatistics } from '@shared/types/domain.types';
 import { IPCChannels } from '@shared/types/ipc.types';
 import { useTerminalStore, SessionMetadata, SessionData } from './terminalStore';
-import { ConversationDatabase } from '../services/ConversationDatabase';
-
-// ⭐ 创建 IndexedDB 实例（渲染进程直接使用）
-const conversationDB = new ConversationDatabase();
 
 interface HistoryState {
   // 数据
@@ -44,12 +40,7 @@ interface HistoryState {
   setDateFilter: (filter: 'all' | 'today' | 'week' | 'month') => void;
   clearFilters: () => void;
 
-  // ⭐⭐⭐ 新增：IndexedDB 功能
-  loadMessagesFromIndexedDB: (sessionId: string) => Promise<{ fromBackup: boolean }>;  // 智能加载消息
-  searchIndexedDB: (keyword: string, options?: any) => Promise<void>;  // IndexedDB 全文搜索
-  deleteSessionFromIndexedDB: (sessionId: string) => Promise<void>;  // 删除 IndexedDB 历史
-
-  // ⭐⭐⭐ 新增：SQLite FTS5 全文搜索
+  // ⭐⭐⭐ SQLite FTS5 全文搜索
   searchWithFTS5: (query: string, options?: {
     limit?: number;
     offset?: number;
@@ -221,62 +212,9 @@ export const useHistoryStore = create<HistoryState>()(
       console.log(`[HistoryStore] ✅ 已设置 selectedSession 和 isLoadingMessages=true`);
 
       try {
-        // 1️⃣ 优先尝试从 IndexedDB 加载
-        console.log(`[HistoryStore] 1️⃣ 尝试从 IndexedDB 加载...`);
-        console.time(`[HistoryStore] IndexedDB 查询耗时: ${sessionId}`);
-        const messages = await conversationDB.getSessionMessages(sessionId);
-        console.timeEnd(`[HistoryStore] IndexedDB 查询耗时: ${sessionId}`);
-        console.log(`[HistoryStore] IndexedDB 返回 ${messages.length} 条消息`);
-
-        if (messages.length > 0) {
-          // ✅ IndexedDB 有数据，直接使用
-          console.log(`[HistoryStore] ✅ IndexedDB 有数据，构建 fullSession...`);
-
-          // 转换 ConversationMessage[] 为 ChatMessage[]
-          const chatMessages = messages.map(msg => ({
-            id: msg.id?.toString() || `${msg.sessionId}-${msg.timestamp}`,
-            role: msg.role as 'user' | 'assistant',
-            content: msg.content,
-            timestamp: msg.timestamp,
-            tokenUsage: msg.metadata?.tokenCount ? {
-              totalTokens: msg.metadata.tokenCount,
-              inputTokens: 0,
-              outputTokens: 0,
-            } : undefined,
-          }));
-
-          const fullSession: ChatSession = {
-            id: session.id,
-            title: session.title,
-            projectName: session.projectName,
-            projectPath: session.projectPath,
-            createdAt: session.createdAt,
-            modifiedAt: session.modifiedAt,
-            startTime: session.startTime,
-            messageCount: messages.length,
-            totalTokens: session.totalTokens,
-            model: session.model,
-            cliVersion: session.cliVersion,
-            duration: session.duration,
-            approval: session.approval,
-            messages: chatMessages,
-            tokenUsages: [],
-          };
-
-          set((state) => {
-            state.selectedSessionFull = fullSession;
-            state.isLoadingMessages = false;
-          });
-          console.log(`[HistoryStore] ✅ 已设置 selectedSessionFull 和 isLoadingMessages=false`);
-
-          console.log(`[HistoryStore] ✅ 从 IndexedDB 快速加载: ${messages.length} 条消息`);
-          console.timeEnd(`[HistoryStore] selectSession 总耗时: ${sessionId}`);
-          return;
-        }
-
-        // 2️⃣ IndexedDB 为空，回退到 IPC 加载（从主进程）
-        console.log(`[HistoryStore] 2️⃣ IndexedDB 无数据，使用 IPC 加载: ${sessionId}`);
-        console.time(`[HistoryStore] IPC 加载耗时: ${sessionId}`);
+        // ⭐ 直接从 SQLite 加载（单一数据源，始终最新）
+        console.log(`[HistoryStore] 📥 从 SQLite 加载会话数据...`);
+        console.time(`[HistoryStore] SQLite 加载耗时: ${sessionId}`);
 
         const fullSession = await window.electronAPI.invoke<ChatSession>(
           IPCChannels.HISTORY_GET_SESSION,
@@ -285,50 +223,44 @@ export const useHistoryStore = create<HistoryState>()(
             sessionId: session.id,
           }
         );
-        console.timeEnd(`[HistoryStore] IPC 加载耗时: ${sessionId}`);
+        console.timeEnd(`[HistoryStore] SQLite 加载耗时: ${sessionId}`);
 
-        console.log(`[HistoryStore] IPC 返回数据:`, {
+        // ⭐ 获取第一条消息的预览（安全处理多种格式）
+        const getFirstMessagePreview = () => {
+          const firstMessage = fullSession?.messages?.[0];
+          if (!firstMessage) return 'N/A';
+
+          const content = firstMessage.content;
+
+          // 如果是字符串，直接截取
+          if (typeof content === 'string') {
+            return content.substring(0, 50);
+          }
+
+          // 如果是对象或数组，转为字符串
+          if (typeof content === 'object') {
+            return JSON.stringify(content).substring(0, 50);
+          }
+
+          return 'Unknown format';
+        };
+
+        // ⭐ 诊断日志：显示返回的完整数据
+        console.log(`[HistoryStore] 📥 IPC 返回数据:`, {
           hasFullSession: !!fullSession,
+          returnedSessionId: fullSession?.id,
+          returnedTitle: fullSession?.title,
+          returnedProjectPath: fullSession?.projectPath,
           messagesCount: fullSession?.messages?.length || 0,
+          firstMessagePreview: getFirstMessagePreview(),
         });
 
         set((state) => {
           state.selectedSessionFull = fullSession;
           state.isLoadingMessages = false;
         });
-        console.log(`[HistoryStore] ✅ 已设置 selectedSessionFull 和 isLoadingMessages=false`);
 
-        // 3️⃣ 将 IPC 加载的数据保存到 IndexedDB（下次快速加载）
-        if (fullSession && fullSession.messages && fullSession.messages.length > 0) {
-          try {
-            console.log(`[HistoryStore] 3️⃣ 缓存到 IndexedDB: ${fullSession.messages.length} 条消息`);
-            console.time(`[HistoryStore] IndexedDB 缓存耗时: ${sessionId}`);
-
-            // 转换 ChatMessage[] 为 ConversationMessage[]
-            const conversationMessages = fullSession.messages.map(msg => ({
-              sessionId: fullSession.id,
-              timestamp: msg.timestamp,
-              role: msg.role,
-              content: msg.content,
-              projectPath: fullSession.projectPath,
-              metadata: {
-                title: fullSession.title,
-                model: fullSession.model,
-                tokenCount: msg.tokenUsage?.totalTokens,
-              },
-            }));
-
-            await conversationDB.saveMessages(conversationMessages);
-            console.timeEnd(`[HistoryStore] IndexedDB 缓存耗时: ${sessionId}`);
-            console.log(`[HistoryStore] ✅ 已缓存 ${fullSession.messages.length} 条消息到 IndexedDB`);
-          } catch (cacheError) {
-            console.warn(`[HistoryStore] ⚠️ 缓存到 IndexedDB 失败:`, cacheError);
-          }
-        } else {
-          console.warn(`[HistoryStore] ⚠️ IPC 返回的数据为空或无消息，不缓存`);
-        }
-
-        console.log(`[HistoryStore] ✅ 通过 IPC 加载完整会话: ${session.title}`);
+        console.log(`[HistoryStore] ✅ SQLite 加载完成: ${fullSession?.messages?.length || 0} 条消息`);
         console.timeEnd(`[HistoryStore] selectSession 总耗时: ${sessionId}`);
       } catch (error) {
         console.error(`[HistoryStore] ❌ 加载完整会话失败:`, error);
@@ -540,203 +472,6 @@ export const useHistoryStore = create<HistoryState>()(
 
     // ==================== IndexedDB 功能 ====================
 
-    /**
-     * ⭐ 从 IndexedDB 智能加载消息（优先 IndexedDB，失败则从 JSONL 恢复）
-     * ✅ 直接使用 Dexie，不通过 IPC
-     */
-    loadMessagesFromIndexedDB: async (sessionId: string) => {
-      set((state) => {
-        state.isLoadingMessages = true;
-      });
-
-      try {
-        // ⭐ 直接从 IndexedDB 加载消息
-        let messages = await conversationDB.getSessionMessages(sessionId);
-        let fromBackup = false;
-
-        // 如果 IndexedDB 为空，尝试从 JSONL 加载
-        if (messages.length === 0) {
-          console.info(`[HistoryStore] IndexedDB 无数据，尝试从 JSONL 加载: ${sessionId}`);
-
-          try {
-            const result = await window.electronAPI.invoke<any[]>(
-              'history:load-from-jsonl',
-              { sessionId }
-            );
-
-            messages = result || [];
-            fromBackup = true;
-
-            // 保存到 IndexedDB 以供下次使用
-            if (messages.length > 0) {
-              await conversationDB.saveMessages(messages);
-              console.info(`[HistoryStore] ✅ 已将 ${messages.length} 条消息从 JSONL 导入到 IndexedDB`);
-            }
-          } catch (jsonlError) {
-            console.warn(`[HistoryStore] ⚠️ JSONL 加载失败: ${jsonlError}`);
-          }
-        }
-
-        // 转换为 ChatSession 格式
-        const session = get().selectedSession;
-        if (session) {
-          // 转换 ConversationMessage[] 为 ChatMessage[]
-          const chatMessages = messages.map(msg => ({
-            id: msg.id?.toString() || `${msg.sessionId}-${msg.timestamp}`,
-            role: msg.role as 'user' | 'assistant',
-            content: msg.content,
-            timestamp: msg.timestamp,
-            tokenUsage: msg.metadata?.tokenCount ? {
-              totalTokens: msg.metadata.tokenCount,
-              inputTokens: 0,
-              outputTokens: 0,
-            } : undefined,
-          }));
-
-          const fullSession: ChatSession = {
-            id: session.id,
-            title: session.title,
-            projectName: session.projectName,
-            projectPath: session.projectPath,
-            createdAt: session.createdAt,
-            modifiedAt: session.modifiedAt,
-            startTime: session.startTime,
-            messageCount: messages.length,
-            totalTokens: session.totalTokens,
-            model: session.model,
-            cliVersion: session.cliVersion,
-            duration: session.duration,
-            approval: session.approval,
-            messages: chatMessages,
-            tokenUsages: [],
-          };
-
-          set((state) => {
-            state.selectedSessionFull = fullSession;
-            state.isLoadingMessages = false;
-          });
-
-          if (fromBackup) {
-            console.warn(
-              `[HistoryStore] ⚠️ 历史记录从 JSONL 备份恢复: ${messages.length} 条消息`
-            );
-          } else {
-            console.log(
-              `[HistoryStore] ✅ 从 IndexedDB 加载了 ${messages.length} 条消息`
-            );
-          }
-        }
-
-        return { fromBackup };
-      } catch (error) {
-        console.error('[HistoryStore] 从 IndexedDB 加载消息失败:', error);
-        set((state) => {
-          state.isLoadingMessages = false;
-          state.selectedSessionFull = null;
-        });
-        throw error;
-      }
-    },
-
-    /**
-     * ⭐ IndexedDB 全文搜索（支持中英日分词）
-     * ✅ 直接使用 Dexie，不通过 IPC
-     */
-    searchIndexedDB: async (keyword: string, options?: {
-      sessionId?: string;
-      projectPath?: string;
-      role?: 'user' | 'assistant' | 'system';
-      limit?: number;
-      useTokenizer?: boolean;
-    }) => {
-      set((state) => {
-        state.isLoading = true;
-        state.error = null;
-      });
-
-      try {
-        // ⭐ 直接调用 ConversationDatabase.search()
-        const searchResults = await conversationDB.search(keyword, {
-          sessionId: options?.sessionId,
-          projectPath: options?.projectPath || get().selectedProjectFilter || undefined,
-          role: options?.role,
-          limit: options?.limit || 50,
-          useTokenizer: options?.useTokenizer !== false,  // 默认启用分词
-        });
-
-        console.log(`[HistoryStore] 🔍 IndexedDB 搜索到 ${searchResults.length} 条结果`);
-
-        // 将搜索结果转换为会话列表（按 sessionId 分组）
-        const sessionMap = new Map<string, {
-          session: ChatSessionMetadata;
-          matchCount: number;
-          bestScore: number;
-        }>();
-
-        searchResults.forEach((result) => {
-          const msg = result.message;
-          const existing = sessionMap.get(msg.sessionId);
-
-          if (existing) {
-            existing.matchCount++;
-            existing.bestScore = Math.max(existing.bestScore, result.matchScore);
-          } else {
-            // 创建新的会话元数据
-            sessionMap.set(msg.sessionId, {
-              session: {
-                id: msg.sessionId,
-                title: msg.metadata?.title || `Session ${msg.sessionId.substring(0, 8)}`,
-                projectName: msg.projectPath?.split(/[/\\]/).pop() || 'Unknown',
-                projectPath: msg.projectPath || '',
-                timestamp: new Date(msg.timestamp).toISOString(),
-                messageCount: 1,
-                totalTokens: msg.metadata?.tokenCount || 0,
-                model: msg.metadata?.model || 'unknown',
-                cliVersion: '2.0',
-                duration: 0,
-                approvalStatus: 'auto',
-              },
-              matchCount: 1,
-              bestScore: result.matchScore,
-            });
-          }
-        });
-
-        // 转换为数组并按最佳匹配分数排序
-        const sessions = Array.from(sessionMap.values())
-          .sort((a, b) => b.bestScore - a.bestScore)
-          .map(item => item.session);
-
-        set((state) => {
-          state.sessions = sessions;
-          state.isLoading = false;
-        });
-
-        console.log(`[HistoryStore] ✅ 搜索结果已按匹配度排序: ${sessions.length} 个会话`);
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : 'IndexedDB search failed';
-        set((state) => {
-          state.error = errorMessage;
-          state.isLoading = false;
-        });
-        console.error('[HistoryStore] IndexedDB 搜索失败:', error);
-      }
-    },
-
-    /**
-     * ⭐ 删除 IndexedDB 中的会话历史
-     * ✅ 直接使用 Dexie，不通过 IPC
-     */
-    deleteSessionFromIndexedDB: async (sessionId: string) => {
-      try {
-        // ⭐ 直接调用 ConversationDatabase.deleteSessionMessages()
-        const count = await conversationDB.deleteSessionMessages(sessionId);
-        console.log(`[HistoryStore] ✅ 已从 IndexedDB 删除会话: ${sessionId} (${count} 条消息)`);
-      } catch (error) {
-        console.error('[HistoryStore] 从 IndexedDB 删除会话失败:', error);
-        throw error;
-      }
-    },
 
     /**
      * ⭐⭐⭐ SQLite FTS5 全文搜索（多语言分词）

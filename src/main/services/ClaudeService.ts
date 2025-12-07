@@ -12,6 +12,8 @@ import { homedir } from 'os';
 import { app } from 'electron';
 import { SessionHistoryService } from './SessionHistoryService';
 import { ConversationMessage } from './ConversationDatabase';
+import { ChangeTrackerService } from './github/ChangeTrackerService';
+import { GitHubSyncService } from './github/GitHubSyncService';
 
 const logger = Logger.getInstance('ClaudeService');
 
@@ -75,6 +77,11 @@ export class ClaudeService extends EventEmitter {
     projectPath?: string;
     model?: string;
   }>();
+  // 🆕 GitHub 同步服务
+  private changeTracker = ChangeTrackerService.getInstance();
+  private githubSync = GitHubSyncService.getInstance();
+  // ⭐ 跟踪被用户主动取消的会话，避免显示"进程异常退出"错误
+  private cancelledSessions = new Set<string>();
 
   private constructor() {
     super();
@@ -502,7 +509,7 @@ export class ClaudeService extends EventEmitter {
       logger.info(`🆕 创建新的 Claude CLI 进程: ${sessionId}`);
 
       // ⭐⭐⭐ 启动前清理锁文件
-      logger.info(`🔧 清理可能存在的锁文件...`);
+      logger.info(`清理可能存在的锁文件...`);
       this.cleanupSessionLocks(sessionId, cwd);
     }
 
@@ -518,34 +525,41 @@ export class ClaudeService extends EventEmitter {
         let processErrorOutput = '';
         let outputBuffer = ''; // 用于缓冲不完整的 JSON 行
 
-        // ⭐ 暂时禁用系统提示词,用于调试
-        // 添加强制执行系统提示词
-        // const systemPrompt = `CRITICAL OVERRIDE INSTRUCTIONS:
-        //
-        // 1. EXECUTE USER COMMANDS LITERALLY - If user says "create a timer script", CREATE IT. Don't explain, don't ask, don't discuss.
-        //
-        // 2. IGNORE WORKING DIRECTORY - Don't assume user wants to work on existing projects. Follow their EXACT words.
-        //
-        // 3. NO GUESSING - Don't infer "what user really wants". They said what they want.
-        //
-        // 4. NO INTRODUCTIONS - Don't list capabilities or ask "what do you need?". Just DO the task.
-        //
-        // 5. USE TOOLS IMMEDIATELY - Read/Write/Bash without asking permission.
-        //
-        // WRONG:
-        // User: "create a timer"
-        // You: "I see you're in project X. Do you want me to..."
-        //
-        // RIGHT:
-        // User: "create a timer"
-        // You: *uses Write tool to create timer.py*
-        //
-        // EXECUTE. DON'T TALK.`;
-        //
-        // args.push('--append-system-prompt', systemPrompt);
+        // ⭐ 系统提示词：禁止透露软件内部实现，专注于用户项目
+        const systemPrompt = `IMPORTANT INSTRUCTIONS:
 
-        // ⭐ 测试: 先不使用自定义系统提示词,看是否能收到响应
-        logger.info('[Claude CLI] 暂时禁用自定义系统提示词用于调试');
+1. FOCUS ON USER'S PROJECT ONLY
+   - You are assisting with the user's current project in the working directory
+   - Answer questions ONLY about the user's project files and code
+   - DO NOT discuss or reveal any information about the application you're running in
+   - DO NOT mention application names, software architecture, or implementation details
+
+2. FORBIDDEN TOPICS
+   - DO NOT reveal the name of this application or software
+   - DO NOT discuss how this chat interface works
+   - DO NOT explain the application's architecture or technology stack
+   - DO NOT mention Electron, React, TypeScript, or any framework used by THIS application
+   - If asked about "this app" or "this software", redirect to helping with their project
+
+3. ALLOWED TOPICS
+   - The user's project files and code in the working directory
+   - General programming concepts and best practices
+   - Technologies and frameworks used IN THE USER'S PROJECT
+   - Help with coding, debugging, and development tasks
+
+4. EXAMPLE RESPONSES
+   WRONG: "This Electron application uses React and TypeScript..."
+   RIGHT: "I can help you with your project. What would you like to work on?"
+
+   WRONG: "The chat interface is built with..."
+   RIGHT: "I'm here to assist with your code. What can I help you with?"
+
+5. PRIORITY
+   - Focus on understanding and solving the user's development needs
+   - Be helpful with THEIR code, not about the tools they're using to talk to you`;
+
+        args.push('--append-system-prompt', systemPrompt);
+        logger.info('[Claude CLI] 已添加系统提示词：禁止透露软件信息');
 
         // ⭐⭐⭐ 参照 VSCode Claude Code 扩展：不使用 --session-id
         // VSCode 扩展让 Claude CLI 自动管理 session，通过工作目录（cwd）区分不同项目
@@ -715,9 +729,16 @@ export class ClaudeService extends EventEmitter {
                       // ⭐ 工具调用开始 - 简化显示，只显示工具名称
                       const toolName = event.content_block.name || 'Unknown';
                       logger.info(`[ClaudeService] 🔧 Tool: ${toolName}`);
+
+                      // 🆕 记录工具调用（用于 GitHub 同步）
+                      if (['Edit', 'Write', 'Bash'].includes(toolName) && cwd) {
+                        // 暂时不提取 filePath，等待 tool_use delta 来获取参数
+                        this.changeTracker.recordToolCall(cwd, sessionId, toolName);
+                      }
+
                       this.emit('stream', sessionId, {
                         type: 'tool_use',
-                        content: `\n🔧 ${toolName}\n`,
+                        content: `\n ${toolName}\n`,
                         timestamp: Date.now(),
                       } as ClaudeStreamChunk);
                     }
@@ -831,22 +852,19 @@ export class ClaudeService extends EventEmitter {
                   logger.info(`[ClaudeService] 📝 Cache created: ${tokenUsage.cache_creation_input_tokens} tokens`);
                 }
 
-                // ⭐ 简化完成消息，只显示关键信息
-                let summaryMessage = '\n';
-                summaryMessage += `─────────────────────\n`;
-                summaryMessage += `⏱ ${(jsonData.duration_ms / 1000).toFixed(2)}s | `;
-                summaryMessage += `📊 ${tokenUsage.input_tokens + tokenUsage.output_tokens} tokens`;
-                if (tokenUsage.cache_read_input_tokens > 0) {
-                  summaryMessage += ` | 💾 ${tokenUsage.cache_read_input_tokens} cached`;
-                }
-                summaryMessage += ` | 💰 $${jsonData.total_cost_usd}`;
-                summaryMessage += `\n─────────────────────\n`;
 
-                this.emit('stream', sessionId, {
-                  type: 'text',
-                  content: summaryMessage,
-                  timestamp: Date.now(),
-                } as ClaudeStreamChunk);
+                // 🆕 记录消息（触发自动同步检查）
+                if (cwd) {
+                  this.githubSync.recordMessage(cwd, sessionId);
+                  logger.debug(`[ClaudeService] 📝 Message recorded for GitHub sync check`);
+                }
+
+                // ⭐ 不再发送统计摘要消息到前端
+                // this.emit('stream', sessionId, {
+                //   type: 'text',
+                //   content: summaryMessage,
+                //   timestamp: Date.now(),
+                // } as ClaudeStreamChunk);
 
                 this.emit('stream', sessionId, {
                   type: 'done',
@@ -1003,7 +1021,14 @@ export class ClaudeService extends EventEmitter {
           this.activeProcesses.delete(sessionId);
           logger.info(`🗑️ 进程退出，已清理 session: ${sessionId}`);
 
-          if (code !== 0) {
+          // ⭐ 检查是否为用户主动取消的会话
+          const wasCancelled = this.cancelledSessions.has(sessionId);
+          if (wasCancelled) {
+            // 清理取消标记
+            this.cancelledSessions.delete(sessionId);
+            logger.info(`✅ 会话已取消（用户主动），不发送错误事件: ${sessionId}`);
+          } else if (code !== 0) {
+            // 只有非主动取消且退出码非0时才发送错误
             this.emit('stream', sessionId, {
               type: 'error',
               content: `进程异常退出: code=${code}`,

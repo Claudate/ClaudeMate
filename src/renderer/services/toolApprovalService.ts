@@ -176,7 +176,7 @@ export function getToolDisplayName(toolName: string): string {
     case 'WebSearch':
       return '🌐 搜索网页';
     default:
-      return `🔧 ${toolName}`;
+      return `${toolName}`;
   }
 }
 

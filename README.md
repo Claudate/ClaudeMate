@@ -1,294 +1,456 @@
-# ClautMate - AI-Powered Desktop Assistant
+# ClaudeMate - Enterprise Electron Application
 
-<div align="center">
+A production-ready Electron + React + TypeScript application with focus on extensibility, memory safety, and performance.
 
-![License](https://img.shields.io/badge/license-GPL3.0-blue.svg)
-![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
-![TypeScript](https://img.shields.io/badge/TypeScript-5.3-blue)
-![Electron](https://img.shields.io/badge/Electron-28-47848F)
-![React](https://img.shields.io/badge/React-18-61DAFB)
+## 📚 文档导航
 
-A production-ready desktop application built with Electron, React, and TypeScript, featuring Claude AI integration for intelligent assistance.
+**新手入门**:
+- 🚀 **[快速开始](./docs/QUICKSTART.md)** - 5分钟快速上手（推荐从这里开始）
+- 🔧 **[环境设置](./docs/SETUP.md)** - 完整的开发环境配置指南
 
-[English](./README.md) | [简体中文](./README_CN.md)
+**核心文档**:
+- 📖 **本文档 (README.md)** - 项目功能、特性和API参考
+- 🏗️ **[架构设计](./docs/ARCHITECTURE.md)** - 系统架构和设计决策
+- 💻 **[实现指南](./docs/IMPLEMENTATION_GUIDE.md)** - 功能开发步骤
 
-![ClautMate Screenshot](./imgae/1.jpg)
+**专题文档**:
+- 🗃️ **[IndexedDB 集成](./docs/INDEXEDDB_INTEGRATION.md)** - 数据库集成说明
+- 🤖 **[Claude CLI 参考](./docs/CLAUDE_CLI_REFERENCE.md)** - AI集成技术参考
+- 🎨 **[前端集成指南](./docs/FRONTEND_INTEGRATION_GUIDE.md)** - 前端开发指南
+- 📑 **[文档中心](./docs/README.md)** - 完整的文档索引和导航
 
-[Features](#-features) • [Installation](#-installation) • [Usage](#-usage) • [Architecture](#-architecture) • [Contributing](#-contributing)
+**重构文档** ⭐:
+- 🔄 **[ChatHistory 重构总结](./docs/CHATHISTORY_REFACTORING_FINAL_SUMMARY.md)** - Phase 4 完整重构记录
+- 📋 **[重构计划](./docs/CHATHISTORY_COMPONENT_REFACTORING_PLAN.md)** - 模块化重构方案
+- 🧪 **[功能测试清单](./docs/CHATHISTORY_FUNCTIONAL_TEST_CHECKLIST.md)** - 55项测试用例
+- 📊 **[性能对比分析](./docs/CHATHISTORY_PERFORMANCE_ANALYSIS.md)** - 重构前后性能对比
 
-</div>
-
----
-
-## ✨ Features
-
-### 🤖 AI Assistant Integration
-- **Claude AI Integration**: Seamless integration with Anthropic's Claude Code CLI
-- **Intelligent Chat**: Natural language conversation with AI
-- **Code Understanding**: AI-powered code analysis and suggestions
-- **Multi-language Support**: Chinese, English, and Japanese tokenization
-
-### 🎨 Modern UI/UX
-- **VSCode-inspired Interface**: Familiar and intuitive design
-- **Dark/Light Themes**: Automatic theme switching
-- **Responsive Layout**: Adaptive UI for different screen sizes
-- **Custom Title Bar**: Native-like frameless window
-
-### 📁 Project Management
-- **Project Browser**: Easy project navigation and management
-- **File Explorer**: Built-in file browser with search
-- **Chat History**: Full conversation history with powerful search
-
-### 🔒 Security & Performance
-- **Sandboxed Renderer**: Secure context isolation
-- **Memory Management**: Automatic monitoring and leak prevention
-- **Type Safety**: Full TypeScript coverage with strict mode
-- **Optimized Builds**: Code splitting and lazy loading
+**脚本工具**:
+- 🔧 **[脚本说明](./scripts/README.md)** - 开发和构建脚本使用指南
 
 ---
 
-## 🚀 Installation
-
-### Prerequisites
-
-- **Node.js** 18+ LTS ([Download](https://nodejs.org/))
-- **Claude CLI** (optional, for AI features) - Install via:
-  ```bash
-  npm install -g @anthropic-ai/claude-code
-  ```
-
-### Quick Start
-
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/yourusername/ClautMate.git
-  cd ClautMate
-   ```
-
-2. **Install dependencies**
-   ```bash
-   npm install
-   ```
-
-3. **Start development server**
-   ```bash
-   npm run dev
-   ```
-
-4. **Build for production**
-   ```bash
-   npm run build
-   npm run package
-   ```
-
----
-
-## 📖 Usage
-
-### Basic Operations
-
-**Starting a Chat**
-1. Click on "Assistant" in the navigation bar
-2. Type your question or request
-3. Press Enter or click Send
-4. View AI responses in real-time
-
-**Managing Projects**
-1. Navigate to "Projects" tab
-2. Click "Add Project" to browse for a project folder
-3. Select and open projects from the list
-
-**Searching History**
-1. Go to "History" tab
-2. Use the search bar to find past conversations
-3. Filter by project, date, or keywords
-
-### Configuration
-
-**Claude CLI Setup** (for AI features)
-
-If Claude CLI is not detected:
-1. Install Claude CLI globally:
-   ```bash
-   npm install -g @anthropic-ai/claude-code
-   ```
-2. Authenticate (will open browser):
-   ```bash
-   claude auth login
-   ```
-3. Restart the application
-
-**Theme Switching**
-- The app automatically matches your system theme
-- Manual switching available in the title bar
-
----
-
-## 🏗 Architecture
-
-### Tech Stack
-
-- **Frontend**: React 18 + TypeScript
-- **Desktop Framework**: Electron 28
-- **Build Tool**: Vite 5
-- **State Management**: Zustand + Immer
-- **Styling**: Tailwind CSS + VSCode Theme
-- **Database**: Better-SQLite3 + IndexedDB
-- **AI Integration**: Claude Code CLI
-
-### Project Structure
-
-```
-ClautMate/
-├── src/
-│   ├── main/              # Electron main process
-│   │   ├── managers/      # Window & IPC managers
-│   │   ├── monitors/      # Performance monitoring
-│   │   ├── services/      # Business logic
-│   │   └── utils/         # Utilities
-│   ├── renderer/          # React frontend
-│   │   ├── modules/       # Feature modules
-│   │   │   ├── Assistant/ # AI chat interface
-│   │   │   ├── Projects/  # Project management
-│   │   │   ├── FileExplorer/
-│   │   │   └── ChatHistory/
-│   │   ├── components/    # Reusable UI components
-│   │   ├── stores/        # State management
-│   │   └── hooks/         # Custom React hooks
-│   └── shared/            # Shared types & utils
-├── dist/                  # Build output
-├── release/               # Packaged applications
-└── docs/                  # Additional documentation
-```
+## 🏗️ Architecture Overview
 
 ### Core Principles
 
 1. **Type Safety**: Full TypeScript coverage with strict mode
-2. **Security**: Sandboxed renderer with context isolation
-3. **Performance**: Code splitting, lazy loading, memory monitoring
-4. **Modularity**: Clean separation of concerns
-5. **Extensibility**: Easy to add new features and modules
+2. **Memory Safety**: Built-in memory monitoring and leak prevention
+3. **Extensibility**: Modular architecture with clear separation of concerns
+4. **Performance**: Code splitting, lazy loading, and optimized builds
+5. **Security**: Sandboxed renderer, contextBridge, CSP headers
 
----
+### Project Structure
 
-## 🔧 Development
+```
+claude-skills-app/
+├── src/
+│   ├── main/                    # Electron Main Process
+│   │   ├── index.ts            # Entry point
+│   │   ├── managers/           # System managers
+│   │   │   ├── WindowManager.ts    # Window lifecycle
+│   │   │   └── IPCManager.ts       # IPC communication
+│   │   ├── monitors/           # System monitoring
+│   │   │   ├── MemoryMonitor.ts    # Memory usage tracking
+│   │   │   └── PerformanceMonitor.ts
+│   │   ├── preload/            # Preload scripts
+│   │   │   └── index.ts        # Context bridge
+│   │   └── utils/              # Utilities
+│   │       └── Logger.ts       # Logging system
+│   │
+│   ├── renderer/               # React Renderer Process
+│   │   ├── main.tsx           # React entry point
+│   │   ├── App.tsx            # Main app component
+│   │   ├── components/        # Reusable components
+│   │   │   ├── layout/        # Layout components
+│   │   │   └── common/        # Common components
+│   │   ├── modules/           # Feature modules
+│   │   │   ├── Assistant/     # AI chat module
+│   │   │   ├── Projects/      # Project management
+│   │   │   ├── FileExplorer/  # File browser
+│   │   │   ├── ChatHistory/   # History search
+│   │   │   ├── Settings/      # App settings
+│   │   │   └── Workflow/      # Node editor
+│   │   ├── stores/            # State management (Zustand)
+│   │   │   ├── themeStore.ts
+│   │   │   └── appStore.ts
+│   │   ├── hooks/             # Custom React hooks
+│   │   │   ├── useIPC.ts
+│   │   │   └── useMemoryMonitor.ts
+│   │   └── styles/            # Global styles
+│   │
+│   └── shared/                 # Shared code
+│       ├── types/              # TypeScript types
+│       │   ├── ipc.types.ts   # IPC type definitions
+│       │   └── domain.types.ts # Domain models
+│       └── utils/              # Shared utilities
+│
+├── dist/                       # Build output
+├── release/                    # Packaged apps
+└── docs/                       # Documentation
 
-### Available Scripts
-
-```bash
-# Development
-npm run dev              # Start dev server with hot reload
-npm run dev:vite         # Start Vite dev server only
-npm run dev:electron     # Start Electron only
-
-# Building
-npm run build            # Build for production
-npm run build:vite       # Build renderer process
-npm run build:electron   # Build main process
-npm run package          # Package into executable
-
-# Quality Assurance
-npm run type-check       # TypeScript type checking
-npm run lint             # ESLint checking
-npm run lint:fix         # Auto-fix linting issues
-npm test                 # Run tests
 ```
 
-### Adding New Features
+## 🚀 Key Features
 
-#### 1. Create a New Module
+### 1. Type-Safe IPC Communication
+
+All IPC communication is fully typed and validated:
 
 ```typescript
-// src/renderer/modules/MyModule/index.tsx
-import React from 'react';
+// Renderer Process
+const result = await window.electronAPI.invoke<ProjectData>(
+  IPCChannels.PROJECT_CREATE,
+  { name: 'My Project', path: '/path' }
+);
+```
 
-export default function MyModule() {
-  return (
-    <div className="h-full flex flex-col">
-      <h1>My New Module</h1>
-      {/* Your UI here */}
-    </div>
-  );
+- Runtime validation with Zod
+- Compile-time type checking
+- Automatic error handling
+- Rate limiting (100 req/s per channel)
+
+### 2. Memory Management
+
+Automatic memory monitoring and leak prevention:
+
+- Real-time memory usage tracking
+- Three-level warnings (warning/critical/emergency)
+- Automatic cache cleanup
+- Forced garbage collection when needed
+- Configurable thresholds
+
+```typescript
+// Default thresholds
+{
+  warning: 512 MB,
+  critical: 1024 MB,
+  emergency: 1536 MB
 }
 ```
 
-#### 2. Add Route
+### 3. Modular Architecture
+
+Clean separation with lazy loading:
 
 ```typescript
-// src/renderer/App.tsx
+// Modules are lazy-loaded for better performance
+const Assistant = lazy(() => import('./modules/Assistant'));
+const Workflow = lazy(() => import('./modules/Workflow'));
+```
+
+Benefits:
+- Smaller initial bundle size
+- Faster startup time
+- Better code organization
+- Easy to add new modules
+
+### 4. State Management
+
+Using Zustand with Immer for immutable updates:
+
+```typescript
+export const useAppStore = create<AppState>()(
+  immer((set) => ({
+    currentProject: null,
+    setCurrentProject: (project) => {
+      set((state) => {
+        state.currentProject = project;
+      });
+    },
+  }))
+);
+```
+
+Benefits:
+- Type-safe
+- Minimal boilerplate
+- DevTools support
+- Immutable by default
+
+### 5. VSCode-like UI
+
+Full VSCode theme support:
+
+- Custom title bar (frameless window)
+- Dark/Light theme switching
+- VSCode color palette
+- Smooth transitions
+- Custom scrollbars
+
+## 📦 Installation & Setup
+
+### Prerequisites
+
+- Node.js 18+ LTS
+- npm or yarn
+
+### Install Dependencies
+
+```bash
+cd H:/Electron/claudate
+npm install
+```
+
+### Development
+
+```bash
+# Start dev server (Vite + Electron)
+npm run dev
+
+# Type checking
+npm run type-check
+
+# Linting
+npm run lint
+npm run lint:fix
+```
+
+### Build
+
+```bash
+# Build for production
+npm run build
+
+# Package app
+npm run package
+```
+
+## 🔒 Security Features
+
+### 1. Context Isolation
+
+Renderer process is fully sandboxed:
+
+```typescript
+webPreferences: {
+  contextIsolation: true,
+  nodeIntegration: false,
+  sandbox: true,
+  webSecurity: true,
+}
+```
+
+### 2. Content Security Policy
+
+Strict CSP headers in HTML:
+
+```html
+<meta http-equiv="Content-Security-Policy" content="
+  default-src 'self';
+  script-src 'self';
+  style-src 'self' 'unsafe-inline';
+" />
+```
+
+### 3. IPC Security
+
+- Origin validation
+- Rate limiting
+- Input validation (Zod)
+- Permission checks
+
+## 🎯 Performance Optimizations
+
+### 1. Code Splitting
+
+```typescript
+// Vite config
+build: {
+  rollupOptions: {
+    output: {
+      manualChunks: {
+        'react-vendor': ['react', 'react-dom'],
+        'state-vendor': ['zustand', 'immer'],
+      },
+    },
+  },
+}
+```
+
+### 2. Lazy Loading
+
+All feature modules are lazy-loaded:
+- Initial bundle: ~200KB (gzipped)
+- Modules loaded on demand
+- Suspense boundaries for loading states
+
+### 3. Memory Optimization
+
+- Periodic cache clearing (every 30 minutes)
+- Component cleanup on unmount
+- Event listener cleanup
+- Weak references where applicable
+
+## 🧩 Extending the Application
+
+### Adding a New Module
+
+1. Create module directory:
+```bash
+src/renderer/modules/MyModule/
+├── index.tsx
+├── components/
+├── hooks/
+└── types.ts
+```
+
+2. Add route in App.tsx:
+```typescript
 const MyModule = lazy(() => import('./modules/MyModule'));
 
 <Route path="/my-module" element={<MyModule />} />
 ```
 
-#### 3. Add Navigation
+3. Add navigation item in Sidebar.tsx
 
+### Adding IPC Handlers
+
+1. Define channel in `shared/types/ipc.types.ts`:
 ```typescript
-// src/renderer/components/layout/TitleBar.tsx
-const navItems: NavItem[] = [
-  // ... existing items
-  {
-    path: '/my-module',
-    label: 'My Module',
-    icon: 'codicon-symbol-module',
-  },
-];
+export const IPCChannels = {
+  MY_CHANNEL: 'my:channel',
+  // ...
+} as const;
 ```
 
----
+2. Add schema (optional):
+```typescript
+export const MyDataSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+});
+```
 
-## 🤝 Contributing
+3. Register handler in `main/managers/IPCManager.ts`:
+```typescript
+this.register(
+  IPCChannels.MY_CHANNEL,
+  async (data) => {
+    // Handler logic
+    return result;
+  },
+  MyDataSchema // Optional validator
+);
+```
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+4. Call from renderer:
+```typescript
+const result = await window.electronAPI.invoke(
+  IPCChannels.MY_CHANNEL,
+  { id: '123', name: 'Test' }
+);
+```
 
-### Contribution Guidelines
+## 📊 Monitoring & Debugging
 
-1. **Fork** the repository
-2. **Create** a feature branch (`git checkout -b feature/AmazingFeature`)
-3. **Commit** your changes (`git commit -m 'Add some AmazingFeature'`)
-4. **Push** to the branch (`git push origin feature/AmazingFeature`)
-5. **Open** a Pull Request
+### Memory Monitoring
 
-### Code Style
+View memory usage in:
+- Status bar (bottom right)
+- DevTools console
+- Main process logs
 
-- Use TypeScript for all new code
-- Follow the existing code structure
-- Add appropriate comments for complex logic
-- Ensure all tests pass before submitting PR
+### Logging
 
----
+Logs are saved to:
+- Development: Console only
+- Production: `{userData}/logs/main.log`
+
+### Performance
+
+Use built-in performance monitor:
+
+```typescript
+const stats = await window.electronAPI.invoke(IPCChannels.PERF_STATS);
+console.log('CPU:', stats.cpu, '%');
+console.log('Memory:', stats.memory.rss / 1024 / 1024, 'MB');
+```
+
+## 🔧 Configuration
+
+### Memory Thresholds
+
+Edit in `main/monitors/MemoryMonitor.ts`:
+
+```typescript
+private thresholds: MemoryThresholds = {
+  warning: 512,   // MB
+  critical: 1024, // MB
+  emergency: 1536 // MB
+};
+```
+
+### Theme
+
+Edit VSCode colors in `tailwind.config.js`:
+
+```javascript
+colors: {
+  vscode: {
+    'editor-bg': '#1e1e1e',
+    'accent': '#007acc',
+    // ...
+  }
+}
+```
+
+## 🐛 Troubleshooting
+
+### Memory Issues
+
+If memory usage is high:
+1. Check DevTools Memory profiler
+2. Look for detached DOM nodes
+3. Check for uncleaned event listeners
+4. Review large data structures
+
+### IPC Errors
+
+If IPC calls fail:
+1. Check channel name matches
+2. Verify data schema
+3. Check rate limits
+4. Review main process logs
+
+### Build Errors
+
+If build fails:
+1. Clear dist: `rm -rf dist`
+2. Clear node_modules: `rm -rf node_modules && npm install`
+3. Check TypeScript errors: `npm run type-check`
+
+## 📚 Next Steps
+
+### Recommended Additions
+
+1. **Testing**
+   - Vitest for unit tests
+   - Playwright for E2E tests
+
+2. **CI/CD**
+   - GitHub Actions workflow
+   - Automated releases
+
+3. **Additional Features**
+   - Database integration (SQLite)
+   - Full-text search (Meilisearch)
+   - Claude CLI integration
+   - Workflow engine (Reactflow)
+
+4. **Performance**
+   - Virtual scrolling for large lists
+   - Web Workers for heavy computation
+   - IndexedDB for offline storage
 
 ## 📝 License
 
-This project is licensed under the GPL3.0 License - see the [LICENSE](LICENSE) file for details.
+MIT
+
+## 👥 Contributors
+
+ClaudeMate Team
 
 ---
-
-## 🙏 Acknowledgments
-
-- **Anthropic** - Claude AI integration
-- **Electron** - Desktop framework
-- **React** - UI framework
-- **VSCode** - UI/UX inspiration
-
----
-
-## 📧 Contact & Support
-
-- **Issues**: [GitHub Issues](https://github.com/yourusername/ClautMate/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/yourusername/ClautMate/discussions)
-
-<div align="left">
-  <p><strong>Join our WeChat Group:</strong></p>
-  <img src="./imgae/2wechat.jpg" alt="WeChat Group" width="200" />
-</div>
-
----
-
-<div align="center">
 
 **Built with ❤️ using Electron + React + TypeScript**
-
-[⬆ Back to Top](#clautmate---ai-powered-desktop-assistant)
-
-</div>

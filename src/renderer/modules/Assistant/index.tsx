@@ -21,6 +21,9 @@ export default function Assistant() {
     timestamp?: number; // 添加时间戳强制更新
   }>();
 
+  // ⭐ 中间面板显示状态
+  const [showCenterPanel, setShowCenterPanel] = useState(true);
+
   // ⭐ 获取授权请求状态
   const permissionRequest = useChatStore((state) => state.permissionRequest);
   const respondToPermission = useChatStore((state) => state.respondToPermission);
@@ -59,29 +62,54 @@ export default function Assistant() {
 
   return (
     <div className="h-full flex overflow-hidden bg-vscode-editor-bg">
-      {/* Left Panel: File Explorer - Resizable */}
+      {/* Left Panel: File Explorer - Resizable & Collapsible */}
       <ResizablePanel
         defaultSize={256}
         minSize={200}
         maxSize={500}
         direction="horizontal"
         position="left"
+        collapsible={true}
       >
         <FileExplorerPanel onFileSelect={handleFileSelect} />
       </ResizablePanel>
 
-      {/* Center Panel: File Viewer - Flexible */}
-      <div className="flex-1 overflow-hidden">
-        <FileViewerPanel currentFile={selectedFile} />
-      </div>
+      {/* Center Panel: File Viewer - Flexible & Closeable */}
+      {showCenterPanel && (
+        <div className="flex-1 overflow-hidden relative">
+          <FileViewerPanel currentFile={selectedFile} />
+          {/* 关闭按钮 */}
+          <button
+            onClick={() => setShowCenterPanel(false)}
+            className="absolute top-2 right-2 p-1 hover:bg-vscode-selection-bg/20 rounded transition-colors z-10 opacity-50 hover:opacity-100"
+            title="关闭文件查看器"
+          >
+            <i className="codicon codicon-close text-sm" />
+          </button>
+        </div>
+      )}
 
-      {/* Right Panel: Claude Code - Resizable */}
+      {/* 中间面板关闭后的展开按钮 */}
+      {!showCenterPanel && (
+        <div className="w-8 flex items-center justify-center bg-vscode-sidebar-bg border-l border-r border-vscode-border">
+          <button
+            onClick={() => setShowCenterPanel(true)}
+            className="p-2 hover:bg-vscode-selection-bg/20 rounded transition-colors"
+            title="展开文件查看器"
+          >
+            <i className="codicon codicon-file text-sm" />
+          </button>
+        </div>
+      )}
+
+      {/* Right Panel: Claude Code - Resizable & Collapsible */}
       <ResizablePanel
         defaultSize={384}
         minSize={300}
-        maxSize={600}
+        maxSize={2000}
         direction="horizontal"
         position="right"
+        collapsible={true}
       >
         <ClaudeCodePanel />
       </ResizablePanel>

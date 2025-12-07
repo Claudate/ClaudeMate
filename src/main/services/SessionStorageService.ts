@@ -22,6 +22,7 @@ import {
 } from '@shared/types/domain.types';
 import { Logger } from '../utils/Logger';
 import { SearchIndexService } from './SearchIndexService';
+import { OpenRouterService } from './OpenRouterService';
 
 const logger = Logger.getInstance('SessionStorageService');
 
@@ -31,6 +32,8 @@ export class SessionStorageService {
   private cacheLastUpdated: number = 0;
   private readonly CACHE_TTL = 5 * 60 * 1000; // 5 分钟缓存
   private searchIndexService: SearchIndexService; // ⭐ 搜索索引服务
+  private isBulkImportMode: boolean = false; // ⭐ 批量导入模式标志
+  private pendingIndexSessions: Map<string, string> = new Map(); // ⭐ 待索引的会话: Map<sessionId, projectPath>
 
   constructor(baseStoragePath?: string) {
     // 默认存储路径：应用根目录的 ChatHistory 文件夹
@@ -151,6 +154,54 @@ export class SessionStorageService {
   }
 
   /**
+   * ⭐⭐⭐ 批量保存多条消息（专为导入优化）
+   * 一次性保存所有消息，避免重复读写文件
+   */
+  async saveMessagesInBulkAsync(
+    projectPath: string,
+    sessionId: string,
+    messages: ChatMessage[]
+  ): Promise<void> {
+    const session = await this.getSessionAsync(projectPath, sessionId);
+    if (!session) {
+      throw new Error(`Session ${sessionId} not found`);
+    }
+
+    // ⭐ 一次性添加所有消息
+    session.messages.push(...messages);
+
+    // ⭐ 收集所有 token 使用量
+    for (const message of messages) {
+      if (message.tokenUsage) {
+        session.tokenUsages.push(message.tokenUsage);
+      }
+    }
+
+    // ⭐ 更新修改时间（使用最后一条消息的时间戳）
+    if (messages.length > 0) {
+      const lastMessage = messages[messages.length - 1];
+      session.modifiedAt = new Date(lastMessage.timestamp).toISOString();
+    }
+
+    // ⭐ 一次性保存会话文件
+    await this.saveSessionAsync(projectPath, session);
+
+    // ⭐ 一次性更新索引
+    await this.updateIndexAsync(projectPath, session);
+
+    this.invalidateCache();
+
+    // ⭐ 批量导入模式下跳过实时索引,记录待索引会话
+    if (this.isBulkImportMode) {
+      this.pendingIndexSessions.set(sessionId, projectPath);
+    } else {
+      await this.updateSearchIndex(session);
+    }
+
+    logger.info(`[SessionStorage] 批量保存 ${messages.length} 条消息到会话 ${sessionId}`);
+  }
+
+  /**
    * 获取指定会话
    */
   async getSessionAsync(projectPath: string, sessionId: string): Promise<ChatSession | null> {
@@ -232,8 +283,14 @@ export class SessionStorageService {
     await this.updateIndexAsync(projectPath, session);
     this.invalidateCache();
 
-    // ⭐ 更新搜索索引
-    await this.updateSearchIndex(session);
+    // ⭐ 批量导入模式下跳过实时索引,记录待索引会话
+    if (this.isBulkImportMode) {
+      this.pendingIndexSessions.set(sessionId, projectPath);
+      // logger.info(`[SessionStorage] 批量模式: 延迟索引会话 ${sessionId}`);
+    } else {
+      // 正常模式: 立即更新搜索索引
+      await this.updateSearchIndex(session);
+    }
 
     logger.info(`[SessionStorage] 保存消息到会话 ${sessionId}: ${message.role}`);
   }
@@ -289,14 +346,9 @@ export class SessionStorageService {
       }
     }
 
-    // 从索引中移除
-    const index = await this.getAllSessionsAsync(projectPath);
-    const newIndex = index.filter(s => s.id !== sessionId);
-    await this.saveIndexAsync(projectPath, newIndex);
-    this.invalidateCache();
-
-    // ⭐ 从搜索索引中删除
+    // ⭐⭐⭐ 重构：直接从 SQLite 删除，不再操作 sessionIndex.json
     this.searchIndexService.deleteSession(sessionId);
+    this.invalidateCache();
 
     logger.info(`[SessionStorage] 删除会话: ${sessionId}`);
   }
@@ -383,54 +435,15 @@ export class SessionStorageService {
    * 获取所有项目的会话元数据列表（全局视图）
    */
   async getAllGlobalSessionsAsync(): Promise<ChatSessionMetadata[]> {
-    // 检查缓存
-    const now = Date.now();
-    if (this.globalSessionsCache && (now - this.cacheLastUpdated) < this.CACHE_TTL) {
-      logger.info(`[SessionStorage] 使用缓存数据，共 ${this.globalSessionsCache.length} 个会话`);
-      return this.globalSessionsCache;
-    }
-
-    const allSessions: ChatSessionMetadata[] = [];
+    // ⭐⭐⭐ 重构：直接从 SQLite 读取，不再使用 sessionIndex.json
+    logger.info(`[SessionStorage] 从 SQLite 获取全局会话列表...`);
 
     try {
-      // 确保基础目录存在
-      await this.ensureDirectoryExists(this.baseStoragePath);
-
-      // 遍历所有项目目录
-      const projectDirs = await fs.readdir(this.baseStoragePath);
-
-      for (const projectDir of projectDirs) {
-        const projectPath = path.join(this.baseStoragePath, projectDir);
-        const stat = await fs.stat(projectPath);
-
-        if (!stat.isDirectory()) continue;
-
-        const indexPath = path.join(projectPath, 'sessionIndex.json');
-
-        try {
-          const content = await fs.readFile(indexPath, 'utf-8');
-          const sessions = JSON.parse(content) as ChatSessionMetadata[];
-          allSessions.push(...sessions);
-        } catch (error: any) {
-          if (error.code !== 'ENOENT') {
-            logger.error(`[SessionStorage] 读取项目索引失败 ${projectDir}:`, error);
-          }
-        }
-      }
-
-      // 按修改时间降序排序
-      const sorted = allSessions.sort((a, b) =>
-        new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime()
-      );
-
-      // 更新缓存
-      this.globalSessionsCache = sorted;
-      this.cacheLastUpdated = now;
-
-      logger.info(`[SessionStorage] 全局会话获取完成，共 ${sorted.length} 个会话`);
-      return sorted;
+      const sessions = this.searchIndexService.getAllSessions();
+      logger.info(`[SessionStorage] 全局会话获取完成，共 ${sessions.length} 个会话`);
+      return sessions;
     } catch (error) {
-      logger.error(`[SessionStorage] 获取全局会话列表失败:`, error);
+      logger.error(`[SessionStorage] 从 SQLite 获取全局会话列表失败:`, error);
       return [];
     }
   }
@@ -439,34 +452,15 @@ export class SessionStorageService {
    * 获取所有项目名称列表
    */
   async getAllProjectNamesAsync(): Promise<string[]> {
+    // ⭐⭐⭐ 重构：直接从 SQLite 读取，不再使用 sessionIndex.json
+    logger.info(`[SessionStorage] 从 SQLite 获取项目名称列表...`);
+
     try {
-      await this.ensureDirectoryExists(this.baseStoragePath);
-
-      const projectNames = new Set<string>();
-      const projectDirs = await fs.readdir(this.baseStoragePath);
-
-      for (const projectDir of projectDirs) {
-        const indexPath = path.join(this.baseStoragePath, projectDir, 'sessionIndex.json');
-
-        try {
-          const content = await fs.readFile(indexPath, 'utf-8');
-          const sessions = JSON.parse(content) as ChatSessionMetadata[];
-
-          sessions.forEach(s => {
-            if (s.projectName) {
-              projectNames.add(s.projectName);
-            }
-          });
-        } catch (error: any) {
-          if (error.code !== 'ENOENT') {
-            logger.error(`[SessionStorage] 读取项目名称失败:`, error);
-          }
-        }
-      }
-
-      return Array.from(projectNames).sort();
+      const projectNames = this.searchIndexService.getAllProjectNames();
+      logger.info(`[SessionStorage] 项目名称获取完成，共 ${projectNames.length} 个项目`);
+      return projectNames;
     } catch (error) {
-      logger.error(`[SessionStorage] 获取项目名称列表失败:`, error);
+      logger.error(`[SessionStorage] 从 SQLite 获取项目名称列表失败:`, error);
       return [];
     }
   }
@@ -532,14 +526,9 @@ export class SessionStorageService {
   }
 
   /**
-   * 更新索引
+   * ⭐⭐⭐ 更新元数据索引（只更新 SQLite，不再写 sessionIndex.json）
    */
   private async updateIndexAsync(projectPath: string, session: ChatSession): Promise<void> {
-    const index = await this.getAllSessionsAsync(projectPath);
-
-    // 移除旧的索引项
-    const filtered = index.filter(s => s.id !== session.id);
-
     // 计算文件大小
     const filePath = this.getSessionFilePath(projectPath, session.id);
     let fileSize = 0;
@@ -550,8 +539,8 @@ export class SessionStorageService {
       logger.warn(`[SessionStorage] 无法获取文件大小:`, error);
     }
 
-    // ⭐ 生成会话摘要
-    const summary = this.generateSessionSummary(session);
+    // ⭐ 生成会话摘要 (现在是异步的)
+    const summary = await this.generateSessionSummary(session);
 
     // 创建新的元数据
     const metadata: ChatSessionMetadata = {
@@ -580,19 +569,9 @@ export class SessionStorageService {
       summary, // ⭐ 添加生成的摘要
     };
 
-    // 插入到列表开头（最新的在最前面）
-    filtered.unshift(metadata);
-
-    await this.saveIndexAsync(projectPath, filtered);
-  }
-
-  /**
-   * 保存索引到文件
-   */
-  private async saveIndexAsync(projectPath: string, index: ChatSessionMetadata[]): Promise<void> {
-    const indexPath = this.getIndexPath(projectPath);
-    await this.ensureDirectoryExists(path.dirname(indexPath));
-    await fs.writeFile(indexPath, JSON.stringify(index, null, 2), 'utf-8');
+    // ⭐⭐⭐ 重构：只更新 SQLite，不再写 sessionIndex.json
+    // 元数据通过 updateSearchIndex() 自动同步到 SQLite
+    logger.info(`[SessionStorage] 元数据已准备，将通过搜索索引服务同步到 SQLite`);
   }
 
   /**
@@ -631,14 +610,18 @@ export class SessionStorageService {
   }
 
   /**
-   * ⭐ 生成会话摘要（提取 assistant 的长消息生成摘要）
+   * ⭐ 生成会话摘要（优先使用 AI，降级到简单提取）
    * 策略：
-   * 1. 提取所有 assistant 消息
-   * 2. 优先使用最后一条长消息（>300字符）
-   * 3. 如果没有长消息，使用最后一条 assistant 消息
-   * 4. 智能截断，保留完整句子
+   * 1. 尝试使用 OpenRouter AI 生成智能摘要（推荐）
+   * 2. 如果 AI 失败，降级到简单文本提取：
+   *    - 提取所有 assistant 消息
+   *    - 优先使用最后一条长消息（>300字符）
+   *    - 智能截断，保留完整句子
    */
-  private generateSessionSummary(session: ChatSession): string {
+  private async generateSessionSummary(session: ChatSession): Promise<string> {
+    // ⭐ 直接使用本地文本提取（不依赖 AI，OpenRouter 免费模型不稳定）
+    logger.info(`[SessionStorage] 使用本地方案生成摘要: ${session.id}`);
+
     // 过滤出所有 assistant 消息
     const assistantMessages = session.messages
       .filter(m => m.role === 'assistant' && m.content && typeof m.content === 'string')
@@ -715,8 +698,8 @@ export class SessionStorageService {
         .filter((m) => m.content && typeof m.content === 'string')
         .map((m) => m.content as string);
 
-      // ⭐ 生成会话摘要
-      const summary = this.generateSessionSummary(session);
+      // ⭐ 生成会话摘要 (现在是异步的)
+      const summary = await this.generateSessionSummary(session);
 
       // 构建元数据
       const metadata: ChatSessionMetadata = {
@@ -812,5 +795,123 @@ export class SessionStorageService {
       logger.error('[SessionStorage] 重建搜索索引失败:', error);
       throw error;
     }
+  }
+
+  /**
+   * ⭐⭐⭐ 清理所有项目的 SQLite 搜索索引
+   * ⚠️ 注意：仅清理 SQLite 搜索索引，保留 JSONL 文件
+   *
+   * 清理内容：
+   * - SQLite FTS5 搜索索引 (search_index.db)
+   * - 内存缓存
+   *
+   * 保留内容：
+   * - JSONL 会话文件 (ChatHistory/{hash}/sessions/*.json)
+   * - 会话索引文件 (ChatHistory/{hash}/sessionIndex.json)
+   */
+  public async clearAllHistoryAsync(): Promise<{
+    success: boolean;
+    deletedProjects: number;
+    deletedSessions: number;
+    clearedSQLite: boolean;
+    errors: string[];
+  }> {
+    logger.warn('[SessionStorage] ⚠️ 开始清理 SQLite 数据...');
+    logger.info('[SessionStorage] 📝 注意：JSONL 文件将被保留');
+
+    const result = {
+      success: false,
+      deletedProjects: 0,
+      deletedSessions: 0,
+      clearedSQLite: false,
+      errors: [] as string[],
+    };
+
+    try {
+      // 1. 统计项目和会话数量（用于反馈）
+      const allSessions = await this.getAllGlobalSessionsAsync();
+      const projectNames = await this.getAllProjectNamesAsync();
+
+      result.deletedProjects = projectNames.length;
+      result.deletedSessions = allSessions.length;
+
+      logger.info(`[SessionStorage] 📊 统计: ${result.deletedProjects} 个项目，${result.deletedSessions} 个会话`);
+
+      // 2. ⭐⭐⭐ 清空 SQLite（唯一数据源）
+      try {
+        this.searchIndexService.clearAll();
+        result.clearedSQLite = true;
+        logger.info('[SessionStorage] ✅ SQLite 数据已清空');
+      } catch (error) {
+        const errorMsg = `清空 SQLite 失败: ${error}`;
+        result.errors.push(errorMsg);
+        logger.error(`[SessionStorage] ❌ ${errorMsg}`);
+      }
+
+      // 3. 清空内存缓存
+      this.invalidateCache();
+      logger.info('[SessionStorage] ✅ 内存缓存已清空');
+
+      result.success = true;
+      logger.info(`[SessionStorage] 🎉 数据清理完成`);
+      logger.info(`[SessionStorage] 📁 JSONL 原始文件已保留`);
+
+      return result;
+    } catch (error) {
+      const errorMsg = `清理失败: ${error}`;
+      result.errors.push(errorMsg);
+      logger.error(`[SessionStorage] ❌ ${errorMsg}`);
+      return result;
+    }
+  }
+
+  /**
+   * ⭐ 启用批量导入模式 (禁用实时索引)
+   * 用于大量会话导入时提升性能
+   */
+  enableBulkImportMode(): void {
+    this.isBulkImportMode = true;
+    this.pendingIndexSessions.clear();
+    logger.info(`[SessionStorage] ✅ 批量导入模式已启用 (实时索引已禁用)`);
+  }
+
+  /**
+   * ⭐ 禁用批量导入模式并执行统一索引
+   * 导入完成后调用,对所有待索引会话统一建立索引
+   */
+  async disableBulkImportModeAndIndex(): Promise<void> {
+    this.isBulkImportMode = false;
+
+    const sessionCount = this.pendingIndexSessions.size;
+    if (sessionCount === 0) {
+      logger.info(`[SessionStorage] ✅ 批量导入模式已禁用 (无待索引会话)`);
+      return;
+    }
+
+    logger.info(`[SessionStorage] 🔄 开始批量索引 ${sessionCount} 个会话...`);
+
+    let indexedCount = 0;
+    let failedCount = 0;
+
+    // ⭐ 迭代 Map: [sessionId, sessionProjectPath]
+    for (const [sessionId, sessionProjectPath] of this.pendingIndexSessions) {
+      try {
+        // ⭐ 使用会话对应的项目路径，而不是传入的 projectPath
+        const session = await this.getSessionAsync(sessionProjectPath, sessionId);
+        if (session) {
+          await this.updateSearchIndex(session);
+          indexedCount++;
+        }
+      } catch (error) {
+        failedCount++;
+        logger.error(`[SessionStorage] ❌ 索引会话失败: ${sessionId}`, error);
+      }
+    }
+
+    this.pendingIndexSessions.clear();
+
+    logger.info(
+      `[SessionStorage] ✅ 批量索引完成: 成功 ${indexedCount}, 失败 ${failedCount}`
+    );
   }
 }
