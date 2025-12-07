@@ -437,7 +437,7 @@ colors: {
 - **工作流 (Workflow)** 功能正在积极开发中，尚未完成，欢迎贡献代码或提出建议。
 - 扫码加入微信交流群，获取最新动态：
 
-<img src="https://file-s3.trae.ai/trae-user-upload/4311820b-0447-49d7-86c0-6205856b3e6c/image.png" width="200" />
+<img src="public/wechat_1206.png" width="200" />
 
 ## 📝 许可证
 

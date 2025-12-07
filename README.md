@@ -437,7 +437,7 @@ We welcome contributions to make ClaudeMate better!
 - **Workflow** feature is currently under active development and not yet complete. Contributions and suggestions are welcome.
 - Join our WeChat group for updates:
 
-<img src="https://file-s3.trae.ai/trae-user-upload/4311820b-0447-49d7-86c0-6205856b3e6c/image.png" width="200" />
+<img src="public/wechat_1206.png" width="200" />
 
 ## 📝 License
 
