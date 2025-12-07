@@ -1,5 +1,7 @@
 # ClaudeMate - Enterprise Electron Application
 
+**English** | [中文](README_zh-CN.md)
+
 A production-ready Electron + React + TypeScript application with focus on extensibility, memory safety, and performance.
 
 ## 🏗️ Architecture Overview
@@ -428,9 +430,18 @@ If build fails:
    - Web Workers for heavy computation
    - IndexedDB for offline storage
 
+## 🤝 Community & Contributing
+
+We welcome contributions to make ClaudeMate better!
+
+- **Workflow** feature is currently under active development and not yet complete. Contributions and suggestions are welcome.
+- Join our WeChat group for updates:
+
+<img src="https://file-s3.trae.ai/trae-user-upload/4311820b-0447-49d7-86c0-6205856b3e6c/image.png" width="200" />
+
 ## 📝 License
 
-MIT
+GPL-3.0
 
 ## 👥 Contributors
 

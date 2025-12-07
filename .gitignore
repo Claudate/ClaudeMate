@@ -99,7 +99,6 @@ test-github-sync.js
 # Exclude build artifacts and IDE files
 build-output1/
 .trae/
-resources/*.zip
-resources/*.bak
+resources/
 scripts/test*.js
 scripts/test*.ts
