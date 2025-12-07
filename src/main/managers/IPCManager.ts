@@ -20,6 +20,10 @@ import {
   HistoryDeleteSessionSchema,
   HistorySearchSessionsSchema,
   HistoryUpdateTitleSchema,
+  WorkflowGenerateFromConversationSchema,
+  WorkflowGetByProjectSchema,
+  SkillGetAllSchema,
+  SkillLoadSchema,
 } from '../../shared/types/ipc.types';
 import { Logger } from '../utils/Logger';
 import { WindowManager } from './WindowManager';
@@ -72,6 +76,9 @@ export class IPCManager {
     this.registerShellHandlers(); // ⭐ Shell operations!
     this.registerWorkflowHandlers(); // ⭐ Workflow management!
     this.registerHistoryHandlers(); // ⭐ Chat History management!
+    this.registerSkillHandlers(); // ⭐ Skill management!
+    this.registerGitHubSyncHandlers(); // 🆕 GitHub Sync management!
+    this.registerClaudeCodeImportHandlers(); // 🆕 Claude Code Import!
 
     ipcMain.handle('ipc:invoke', async (event: IpcMainInvokeEvent, channel: string, data: unknown) => {
       return this.handleInvoke(event, channel as IPCChannel, data);
@@ -189,7 +196,16 @@ export class IPCManager {
   }
 
   private createTimeout(channel: IPCChannel): Promise<never> {
-    const timeout = channel.startsWith('claude:') ? 60000 : 10000;
+    // ⭐ 根据不同的操作类型设置不同的超时时间
+    let timeout = 10000; // 默认 10 秒
+
+    if (channel.startsWith('claude:')) {
+      timeout = 60000; // Claude CLI 操作: 60 秒
+    } else if (channel.startsWith('claude-code:import')) {
+      timeout = 1800000; // Claude Code 导入: 1800 秒 (30分钟)
+    } else if (channel.startsWith('history:search')) {
+      timeout = 30000; // 历史搜索: 30 秒
+    }
 
     return new Promise((_, reject) => {
       setTimeout(() => {
@@ -585,7 +601,7 @@ export class IPCManager {
       }
 
       const result = await dialog.showOpenDialog(mainWindow, {
-        properties: ['openFile'],
+        properties: ['openFile', 'showHiddenFiles'],
         filters: [
           { name: 'All Files', extensions: ['*'] },
           { name: 'Text Files', extensions: ['txt', 'md', 'json', 'js', 'ts', 'tsx', 'jsx'] },
@@ -609,7 +625,7 @@ export class IPCManager {
       }
 
       const result = await dialog.showOpenDialog(mainWindow, {
-        properties: ['openDirectory'],
+        properties: ['openDirectory', 'showHiddenFiles'],
       });
 
       if (result.canceled || result.filePaths.length === 0) {
@@ -623,6 +639,8 @@ export class IPCManager {
     this.register('dialog:open-file' as IPCChannel, async (data: {
       filters?: { name: string; extensions: string[] }[];
       properties?: ('openFile' | 'openDirectory' | 'multiSelections' | 'showHiddenFiles')[];
+      defaultPath?: string;
+      filterIndex?: number;
     }) => {
       const windowManager = WindowManager.getInstance();
       const mainWindow = windowManager.getMainWindow();
@@ -631,10 +649,24 @@ export class IPCManager {
         throw new IPCError(IPCErrorCode.INTERNAL_ERROR, 'Main window not found');
       }
 
-      const result = await dialog.showOpenDialog(mainWindow, {
+      const dialogOptions: any = {
         properties: data.properties || ['openFile'],
         filters: data.filters || [{ name: 'All Files', extensions: ['*'] }],
-      });
+      };
+
+      // 添加可选参数
+      if (data.defaultPath !== undefined) {
+        dialogOptions.defaultPath = data.defaultPath;
+      }
+      if (data.filterIndex !== undefined) {
+        dialogOptions.filterIndex = data.filterIndex;
+      }
+
+      // ⭐ 调试：打印对话框选项
+      console.log('[IPCManager] 🔍 File dialog options:', JSON.stringify(dialogOptions, null, 2));
+      console.log('[IPCManager] 🔍 Received filterIndex:', data.filterIndex);
+
+      const result = await dialog.showOpenDialog(mainWindow, dialogOptions);
 
       return { canceled: result.canceled, filePaths: result.filePaths };
     });
@@ -802,15 +834,15 @@ export class IPCManager {
     // Scan directory (with filtering)
     this.register(
       IPCChannels.FS_SCAN_DIRECTORY,
-      async (data: { path: string }) => {
+      async (data: { path: string; showHiddenFiles?: boolean }) => {
         const fs = require('fs').promises;
         const path = require('path');
 
-        const shouldIgnore = (name: string): boolean => {
-          const ignorePatterns = [
+        const shouldIgnore = (name: string, showHidden: boolean = false): boolean => {
+          // Always ignore these directories/files regardless of settings
+          const alwaysIgnore = [
             'node_modules',
             '.git',
-            '.vscode',
             'dist',
             'build',
             '.next',
@@ -818,28 +850,74 @@ export class IPCManager {
             'coverage',
             '.DS_Store',
             'Thumbs.db',
+            'build-output',
+            'build-output1',
           ];
-          return ignorePatterns.includes(name) || name.startsWith('.');
+
+          if (alwaysIgnore.includes(name)) {
+            return true;
+          }
+
+          // If showHidden is enabled, show all other hidden files
+          if (showHidden) {
+            return false;
+          }
+
+          // Whitelist of important hidden files/folders to always show
+          const importantHidden = [
+            '.claude',
+            '.speckit',
+            '.specify',
+            '.env',
+            '.env.local',
+            '.env.example',
+            '.gitignore',
+            '.eslintrc',
+            '.eslintrc.js',
+            '.eslintrc.json',
+            '.prettierrc',
+            '.prettierrc.js',
+            '.prettierrc.json',
+            '.editorconfig',
+            '.nvmrc',
+            '.npmrc',
+          ];
+
+          // If it's a hidden file, only show if in whitelist
+          if (name.startsWith('.')) {
+            return !importantHidden.includes(name);
+          }
+
+          return false;
         };
 
-        const scanDir = async (dirPath: string, maxDepth: number = 3, currentDepth: number = 0): Promise<any[]> => {
-          if (currentDepth >= maxDepth) {
-            return [];
-          }
+        const showHidden = data.showHiddenFiles ?? false;
+
+        const scanDir = async (dirPath: string, currentDepth: number = 0): Promise<any[]> => {
+          // ⭐⭐⭐ 完全移除深度限制，只通过 shouldIgnore 来过滤不需要的目录
 
           try {
             const entries = await fs.readdir(dirPath, { withFileTypes: true });
             const result: any[] = [];
 
+            logger.info(`📁 扫描目录: ${dirPath} (深度: ${currentDepth}, 文件数: ${entries.length})`);
+
             for (const entry of entries) {
-              if (shouldIgnore(entry.name)) {
+              const isIgnored = shouldIgnore(entry.name, showHidden);
+
+              // ⭐ 特别记录 .md 文件
+              if (entry.name.endsWith('.md')) {
+                logger.info(`📄 发现 .md 文件: ${entry.name}, 是否忽略: ${isIgnored}`);
+              }
+
+              if (isIgnored) {
                 continue;
               }
 
               const fullPath = path.join(dirPath, entry.name);
 
               if (entry.isDirectory()) {
-                const children = await scanDir(fullPath, maxDepth, currentDepth + 1);
+                const children = await scanDir(fullPath, currentDepth + 1);
                 result.push({
                   name: entry.name,
                   path: fullPath,
@@ -848,12 +926,21 @@ export class IPCManager {
                   children: children.length > 0 ? children : undefined,
                 });
               } else {
+                // ⭐ 特别记录 .md 文件被添加
+                if (entry.name.endsWith('.md')) {
+                  logger.info(`✅ 添加 .md 文件到结果: ${entry.name}`);
+                }
                 result.push({
                   name: entry.name,
                   path: fullPath,
                   type: 'file',
                 });
               }
+            }
+
+            const mdFiles = result.filter(r => r.type === 'file' && r.name.endsWith('.md'));
+            if (mdFiles.length > 0) {
+              logger.info(`📊 当前目录 ${dirPath} 找到 ${mdFiles.length} 个 .md 文件: ${mdFiles.map(f => f.name).join(', ')}`);
             }
 
             return result.sort((a, b) => {
@@ -868,6 +955,24 @@ export class IPCManager {
 
         const fileTree = await scanDir(data.path);
         return { fileTree, rootPath: data.path };
+      }
+    );
+
+    // ⭐⭐⭐ Start watching directory for changes
+    this.register(
+      IPCChannels.FS_WATCH_START,
+      async (data: { path: string }) => {
+        fsService.watchDirectory(data.path);
+        return { success: true, path: data.path };
+      }
+    );
+
+    // ⭐⭐⭐ Stop watching directory
+    this.register(
+      IPCChannels.FS_WATCH_STOP,
+      async (data: { path: string }) => {
+        fsService.stopWatching(data.path);
+        return { success: true, path: data.path };
       }
     );
 
@@ -974,6 +1079,61 @@ export class IPCManager {
       return { canceled };
     });
 
+    // ⭐⭐⭐ Generate workflow from conversation
+    this.register(
+      IPCChannels.WORKFLOW_GENERATE_FROM_CONVERSATION,
+      async (data: z.infer<typeof WorkflowGenerateFromConversationSchema>) => {
+        const { WorkflowGeneratorService } = require('../services/WorkflowGeneratorService');
+        const generatorService = WorkflowGeneratorService.getInstance();
+
+        const { messages, projectPath, projectName, existingWorkflowId } = data;
+
+        // Check if we should update existing workflow
+        if (existingWorkflowId) {
+          const existingWorkflow = await dbService.getWorkflow(existingWorkflowId);
+          if (existingWorkflow) {
+            logger.info(`Updating existing workflow: ${existingWorkflowId}`);
+            const updatedWorkflow = generatorService.updateWorkflowFromConversation(
+              existingWorkflow,
+              messages,
+              { projectPath, projectName }
+            );
+            await dbService.updateWorkflow(existingWorkflowId, updatedWorkflow);
+            return { workflow: updatedWorkflow, created: false };
+          }
+        }
+
+        // Generate new workflow
+        const workflow = generatorService.generateWorkflowFromConversation(messages, {
+          projectPath,
+          projectName,
+        });
+
+        if (workflow) {
+          // Add project path to workflow for filtering
+          workflow.projectPath = projectPath;
+          workflow.projectName = projectName;
+
+          await dbService.createWorkflow(workflow);
+          logger.info(`Created new workflow: ${workflow.name} (${workflow.id})`);
+          return { workflow, created: true };
+        }
+
+        return { workflow: null, created: false };
+      },
+      WorkflowGenerateFromConversationSchema
+    );
+
+    // ⭐⭐⭐ Get workflows by project
+    this.register(
+      IPCChannels.WORKFLOW_GET_BY_PROJECT,
+      async (data: z.infer<typeof WorkflowGetByProjectSchema>) => {
+        const workflows = await dbService.getWorkflowsByProject(data.projectPath);
+        return workflows;
+      },
+      WorkflowGetByProjectSchema
+    );
+
     // ⭐ Setup workflow event forwarding
     workflowEngine.on('workflow-event', (event: any) => {
       this.sendToRenderer('workflow:event', event);
@@ -986,155 +1146,12 @@ export class IPCManager {
    * ⭐ Register Chat History handlers (参照 WPF SessionStorageService)
    */
   private registerHistoryHandlers(): void {
-    const { SessionStorageService } = require('../services/SessionStorageService');
-    const sessionStorage = new SessionStorageService();
+    // ⭐⭐⭐ 使用 HistoryHandlers 类统一注册所有历史相关的 handler
+    const { HistoryHandlers } = require('./ipc-handlers/HistoryHandlers');
+    const historyHandlers = new HistoryHandlers();
 
-    // 创建新会话
-    this.register(
-      IPCChannels.HISTORY_CREATE_SESSION,
-      async (data: { projectPath: string; projectName: string; title?: string; sessionId?: string }) => {
-        // ⭐⭐⭐ 调试日志：记录 IPC 接收到的参数
-        logger.info(`[IPCManager] 📨 HISTORY_CREATE_SESSION 收到请求`, {
-          projectPath: data.projectPath,
-          projectName: data.projectName,
-          title: data.title,
-          sessionId: data.sessionId || '(未提供)',
-        });
-
-        const result = await sessionStorage.createSessionAsync(
-          data.projectPath,
-          data.projectName,
-          data.title,
-          data.sessionId  // ⭐ 传递 sessionId
-        );
-
-        logger.info(`[IPCManager] 📤 HISTORY_CREATE_SESSION 返回结果`, {
-          id: result.id,
-          title: result.title,
-        });
-
-        return result;
-      },
-      HistoryCreateSessionSchema
-    );
-
-    // 获取指定会话
-    this.register(
-      IPCChannels.HISTORY_GET_SESSION,
-      async (data: { projectPath: string; sessionId: string }) => {
-        return await sessionStorage.getSessionAsync(data.projectPath, data.sessionId);
-      },
-      HistoryGetSessionSchema
-    );
-
-    // 获取所有会话（全局）
-    this.register(IPCChannels.HISTORY_GET_ALL_SESSIONS, async () => {
-      const sessions = await sessionStorage.getAllGlobalSessionsAsync();
-      return { sessions };
-    });
-
-    // 保存消息到会话
-    this.register(
-      IPCChannels.HISTORY_SAVE_MESSAGE,
-      async (data: { projectPath: string; sessionId: string; message: any }) => {
-        await sessionStorage.saveMessageAsync(
-          data.projectPath,
-          data.sessionId,
-          data.message
-        );
-        return { success: true };
-      }
-      // Note: 不使用 HistorySaveMessageSchema 以避免类型推断问题
-    );
-
-    // 更新会话数据
-    this.register(
-      IPCChannels.HISTORY_UPDATE_SESSION,
-      async (data: { projectPath: string; session: any }) => {
-        await sessionStorage.updateSessionAsync(data.projectPath, data.session);
-        return { success: true };
-      }
-    );
-
-    // 删除会话
-    this.register(
-      IPCChannels.HISTORY_DELETE_SESSION,
-      async (data: { projectPath: string; sessionId: string }) => {
-        await sessionStorage.deleteSessionAsync(data.projectPath, data.sessionId);
-        return { success: true };
-      },
-      HistoryDeleteSessionSchema
-    );
-
-    // 搜索会话（标题/项目名）
-    this.register(
-      IPCChannels.HISTORY_SEARCH_SESSIONS,
-      async (data: { keyword?: string; projectPath?: string }) => {
-        return await sessionStorage.searchSessionsAsync(
-          data.keyword || '',
-          data.projectPath
-        );
-      },
-      HistorySearchSessionsSchema
-    );
-
-    // 搜索消息内容
-    this.register(
-      IPCChannels.HISTORY_SEARCH_MESSAGES,
-      async (data: { keyword: string; projectPath?: string }) => {
-        return await sessionStorage.searchSessionsByMessageContentAsync(
-          data.keyword,
-          data.projectPath
-        );
-      }
-    );
-
-    // 获取统计信息
-    this.register(IPCChannels.HISTORY_GET_STATISTICS, async () => {
-      return await sessionStorage.getGlobalSessionStatisticsAsync();
-    });
-
-    // 更新会话标题
-    this.register(
-      IPCChannels.HISTORY_UPDATE_TITLE,
-      async (data: { projectPath: string; sessionId: string; newTitle: string }) => {
-        await sessionStorage.updateSessionTitleAsync(
-          data.projectPath,
-          data.sessionId,
-          data.newTitle
-        );
-        return { success: true };
-      },
-      HistoryUpdateTitleSchema
-    );
-
-    // 获取所有项目名称
-    this.register(IPCChannels.HISTORY_GET_PROJECT_NAMES, async () => {
-      return await sessionStorage.getAllProjectNamesAsync();
-    });
-
-    // ⭐⭐⭐ SQLite FTS5 全文搜索（使用搜索索引）
-    this.register(IPCChannels.HISTORY_SEARCH_WITH_FTS5, async (data: {
-      query: string;
-      limit?: number;
-      offset?: number;
-      projectPath?: string;
-      sortBy?: 'relevance' | 'time';
-    }) => {
-      const results = sessionStorage.searchWithIndex(data.query, {
-        limit: data.limit,
-        offset: data.offset,
-        projectPath: data.projectPath,
-        sortBy: data.sortBy,
-      });
-      return { results };
-    });
-
-    // ⭐⭐⭐ 重建 SQLite FTS5 搜索索引
-    this.register(IPCChannels.HISTORY_REBUILD_SEARCH_INDEX, async () => {
-      await sessionStorage.rebuildSearchIndexAsync();
-      return { success: true };
-    });
+    // 使用 HistoryHandlers 的 register 方法注册所有 handler
+    historyHandlers.register(this.register.bind(this));
 
     // ⭐⭐⭐ JSONL 备份服务（仅主进程）
     // IndexedDB 操作已移至渲染进程直接处理
@@ -1146,7 +1163,173 @@ export class IPCManager {
       return await historyService.getSessionMessages(data.sessionId);
     });
 
-    logger.info('Chat History IPC handlers registered (JSONL backup only, IndexedDB in renderer)');
+    // ⭐⭐⭐ OpenRouter AI - 生成会话标题
+    const { OpenRouterService } = require('../services/OpenRouterService');
+    const openRouterService = OpenRouterService.getInstance();
+
+    this.register('ai:generate-title' as IPCChannel, async (data: { firstMessage: string; maxLength?: number }) => {
+      try {
+        const title = await openRouterService.generateSessionTitle(
+          data.firstMessage,
+          data.maxLength || 20
+        );
+        return { title };
+      } catch (error) {
+        logger.error('[IPC] AI 标题生成失败:', error);
+        // 降级：返回错误，让前端使用 fallback
+        throw error;
+      }
+    });
+
+    logger.info('Chat History IPC handlers registered via HistoryHandlers (JSONL backup only, IndexedDB in renderer)');
+  }
+
+  /**
+   * ⭐ Register Skill handlers
+   */
+  private registerSkillHandlers(): void {
+    const { SkillService } = require('../services/SkillService');
+    const skillService = SkillService.getInstance();
+
+    // 获取所有可用的 Skills
+    this.register(
+      IPCChannels.SKILL_GET_ALL,
+      async (data: z.infer<typeof SkillGetAllSchema>) => {
+        logger.info(`Getting all skills for project: ${data.projectPath || 'none'}`);
+        const skills = await skillService.getAllSkills(data.projectPath);
+        logger.info(`Found ${skills.length} skills`);
+        return { skills };
+      },
+      SkillGetAllSchema
+    );
+
+    // 加载指定 Skill 到 Assistant
+    this.register(
+      IPCChannels.SKILL_LOAD,
+      async (data: z.infer<typeof SkillLoadSchema>) => {
+        logger.info(`Loading skill: ${data.skillId}`);
+        // This will be handled by the renderer (navigate to Assistant with context)
+        return { success: true, skillId: data.skillId };
+      },
+      SkillLoadSchema
+    );
+
+    logger.info('Skill IPC handlers registered');
+  }
+
+  /**
+   * 🆕 Register GitHub Sync handlers
+   */
+  private registerGitHubSyncHandlers(): void {
+    const { GitHubSyncService } = require('../services/github/GitHubSyncService');
+    const githubSync = GitHubSyncService.getInstance();
+
+    // 手动触发同步
+    this.register(
+      IPCChannels.GITHUB_SYNC_MANUAL,
+      async (data: { projectPath: string }) => {
+        logger.info(`[GitHub Sync] Manual sync triggered for: ${data.projectPath}`);
+        const result = await githubSync.syncProject(data.projectPath);
+
+        // 发送同步结果事件到渲染进程
+        if (result.success) {
+          this.sendToRenderer(IPCChannels.GITHUB_SYNC_COMPLETED, result);
+        } else {
+          this.sendToRenderer(IPCChannels.GITHUB_SYNC_FAILED, {
+            error: result.error || 'Unknown error',
+            projectPath: data.projectPath,
+          });
+        }
+
+        return result;
+      }
+    );
+
+    // 配置 GitHub 同步
+    this.register(
+      IPCChannels.GITHUB_SYNC_CONFIGURE,
+      async (data: any) => {
+        logger.info(`[GitHub Sync] Updating configuration`);
+        await githubSync.updateConfig(data.config);
+        return { success: true };
+      }
+    );
+
+    // 测试 GitHub 连接
+    this.register(
+      IPCChannels.GITHUB_SYNC_TEST_CONNECTION,
+      async (data: { config?: any }) => {
+        logger.info(`[GitHub Sync] Testing connection`);
+
+        // 如果提供了临时配置，先用它初始化（不保存到数据库）
+        if (data.config) {
+          logger.info(`[GitHub Sync] Using temporary config for testing`);
+          await githubSync.updateConfig({ ...data.config, enabled: false });
+        }
+
+        const result = await githubSync.testConnection();
+        return result;
+      }
+    );
+    // 获取 Git 状态
+    this.register(
+      IPCChannels.GITHUB_GET_GIT_STATUS,
+      async (data: { projectPath: string }) => {
+        logger.info(`[GitHub Sync] Getting Git status for: ${data.projectPath}`);
+        const status = await githubSync.getGitStatus(data.projectPath);
+        return status;
+      }
+    );
+
+    // 初始化 Git 仓库
+    this.register(
+      IPCChannels.GITHUB_INIT_REPOSITORY,
+      async (data: { projectPath: string; userName: string; userEmail: string }) => {
+        logger.info(`[GitHub Sync] Initializing Git repository: ${data.projectPath}`);
+        const result = await githubSync.initializeGitRepository(
+          data.projectPath,
+          data.userName,
+          data.userEmail
+        );
+        return result;
+      }
+    );
+
+    // 添加远程仓库
+    this.register(
+      IPCChannels.GITHUB_ADD_REMOTE,
+      async (data: { projectPath: string; remoteName: string; remoteUrl: string }) => {
+        logger.info(`[GitHub Sync] Adding remote: ${data.remoteName} -> ${data.remoteUrl}`);
+        const result = await githubSync.addRemote(
+          data.projectPath,
+          data.remoteName,
+          data.remoteUrl
+        );
+        return result;
+      }
+    );
+
+    // 获取所有同步历史
+    this.register(
+      IPCChannels.GITHUB_GET_SYNC_HISTORY,
+      async () => {
+        logger.info(`[GitHub Sync] Getting all sync history`);
+        const history = await githubSync.getAllSyncHistory();
+        return { history };
+      }
+    );
+
+    // 根据项目获取同步历史
+    this.register(
+      IPCChannels.GITHUB_GET_SYNC_HISTORY_BY_PROJECT,
+      async (data: { projectPath: string }) => {
+        logger.info(`[GitHub Sync] Getting sync history for: ${data.projectPath}`);
+        const history = await githubSync.getSyncHistoryByProject(data.projectPath);
+        return { history };
+      }
+    );
+
+    logger.info('GitHub Sync IPC handlers registered');
   }
 
   public sendToRenderer(channel: string, ...args: unknown[]): void {
@@ -1156,6 +1339,62 @@ export class IPCManager {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send(channel, ...args);
     }
+  }
+
+  /**
+   * ⭐⭐⭐ Register Claude Code Import Handlers
+   * 处理从 Claude Code CLI 导入聊天历史的功能
+   */
+  private registerClaudeCodeImportHandlers(): void {
+    const { ClaudeCodeImportController, ImportProgress } = require('../services/ClaudeCodeImportController');
+    const importController = new ClaudeCodeImportController();
+
+    // 检测 Claude Code 数据
+    this.register(
+      IPCChannels.CLAUDE_CODE_DETECT,
+      async () => {
+        logger.info('[ClaudeCodeImport] 检测 Claude Code 数据...');
+        const result = await importController.detectData();
+        logger.info(`[ClaudeCodeImport] 检测结果: ${result.exists ? `找到 ${result.totalSessions} 个会话, ${result.projects.length} 个项目` : '未找到数据'}`);
+        logger.info(`[ClaudeCodeImport] 返回的 projects 数量:`, result.projects?.length);
+        return result;
+      }
+    );
+
+    // 预览导入数据
+    this.register(
+      IPCChannels.CLAUDE_CODE_PREVIEW,
+      async () => {
+        logger.info('[ClaudeCodeImport] 预览导入数据...');
+        const preview = await importController.previewImport();
+        logger.info(`[ClaudeCodeImport] 预览完成: ${preview.projects.length} 个项目`);
+        return preview;
+      }
+    );
+
+    // 导入所有会话
+    this.register(
+      IPCChannels.CLAUDE_CODE_IMPORT_ALL,
+      async () => {
+        logger.info('[ClaudeCodeImport] 🚀 开始导入所有会话...');
+
+        const windowManager = WindowManager.getInstance();
+        const mainWindow = windowManager.getMainWindow();
+
+        // 导入进度回调
+        const result = await importController.importAll((progress: typeof ImportProgress) => {
+          // 发送进度事件到渲染进程
+          if (mainWindow) {
+            mainWindow.webContents.send(IPCChannels.CLAUDE_CODE_IMPORT_PROGRESS, progress);
+          }
+        });
+
+        logger.info(`[ClaudeCodeImport] ✅ 导入完成: 成功 ${result.importedSessions}, 跳过 ${result.skippedSessions}, 失败 ${result.failedSessions}`);
+        return result;
+      }
+    );
+
+    logger.info('✅ Claude Code Import handlers registered');
   }
 
   public cleanup(): void {

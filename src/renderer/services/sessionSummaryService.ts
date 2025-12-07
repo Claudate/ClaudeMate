@@ -4,7 +4,7 @@
  *
  * 参照 WPF 的 GenerateSmartTitleAsync 方法:
  * - 在用户发送第一条消息后自动生成智能标题
- * - 使用 Claude API 生成简洁的标题（不超过 20 个字符）
+ * - 使用 OpenRouter AI 生成简洁的标题（不超过 20 个字符）
  * - 标题能够概括对话主题
  */
 
@@ -19,55 +19,44 @@ export interface SessionSummaryOptions {
 /**
  * 生成会话智能标题
  * 参照 WPF 的 GenerateSmartTitleAsync 方法
+ * 现在使用 OpenRouter AI 来生成标题
  */
 export async function generateSessionTitle(options: SessionSummaryOptions): Promise<string> {
   const { firstMessage, projectName, maxLength = 20 } = options;
 
   try {
-    console.log(`[SessionSummary] 开始生成智能标题 - 项目: ${projectName}`);
+    console.log(`[SessionSummary] 🤖 使用 OpenRouter AI 生成智能标题 - 项目: ${projectName}`);
 
-    // 构建提示词（参照 WPF 的 prompt）
-    const prompt = `请为以下对话生成一个简洁的标题（不超过${maxLength}个字符）。
-项目名称：${projectName}
-用户消息：${firstMessage}
-
-要求：
-1. 标题要简洁明了，能概括对话主题
-2. 不超过${maxLength}个字符
-3. 不要包含项目名称
-4. 只返回标题文本，不要其他内容
-
-标题：`;
-
-    // 调用 Claude API
-    const response = await window.electronAPI.invoke(IPCChannels.CLAUDE_EXECUTE, {
-      message: prompt,
-      sessionId: `title-gen-${Date.now()}`, // 临时会话 ID
-      model: 'haiku', // 使用 haiku 更快且成本更低
-      cwd: undefined, // 不需要项目上下文
+    // ⭐ 调用 OpenRouter API 生成标题（通过 IPC）
+    const response = await window.electronAPI.invoke('ai:generate-title' as any, {
+      firstMessage,
+      maxLength,
     });
 
-    // 清理响应（参照 WPF 的清理逻辑）
-    let title = response?.content?.trim()
-      .replace(/^标题[：:]\s*/g, '')
-      .replace(/["「」『』]/g, '')
-      .trim();
+    if (response && response.title) {
+      let title = response.title.trim();
 
-    // 验证标题长度和内容
-    if (title && title.length > 0 && title.length <= maxLength + 10) {
+      // 清理标题（移除可能的前缀和引号）
+      title = title
+        .replace(/^标题[：:]\s*/g, '')
+        .replace(/["「」『』]/g, '')
+        .trim();
+
       // 截断过长标题
       if (title.length > maxLength) {
-        title = title.substring(0, maxLength) + '...';
+        title = title.substring(0, maxLength);
       }
 
-      console.log(`[SessionSummary] 智能标题生成成功: ${title}`);
-      return title;
+      if (title.length > 0) {
+        console.log(`[SessionSummary] ✅ AI 标题生成成功: ${title}`);
+        return title;
+      }
     }
 
-    console.warn('[SessionSummary] 生成的标题无效，使用默认标题');
+    console.warn('[SessionSummary] AI 生成的标题无效，使用降级方案');
     return generateDefaultTitle(firstMessage, maxLength);
   } catch (error) {
-    console.error('[SessionSummary] 智能标题生成失败:', error);
+    console.error('[SessionSummary] ❌ AI 标题生成失败，使用降级方案:', error);
     return generateDefaultTitle(firstMessage, maxLength);
   }
 }

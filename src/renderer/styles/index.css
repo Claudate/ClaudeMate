@@ -168,3 +168,82 @@
 .animate-slide-in {
   animation: slideInFromTop 0.3s ease-out;
 }
+
+/* 进度条动画 - 用于加载状态指示器 */
+@keyframes progress {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.animate-progress {
+  animation: progress 1.5s ease-in-out infinite;
+}
+
+/* 慢速脉冲动画 - 用于加载指示器背景 */
+@keyframes pulse-slow {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.8;
+  }
+}
+
+.animate-pulse-slow {
+  animation: pulse-slow 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* React Flow - Override default white backgrounds for input/output nodes */
+/* React Flow's default style.css sets background-color: white for these node types */
+/* We need to override ONLY the React Flow wrapper, not our custom node content */
+
+.react-flow__node-input,
+.react-flow__node-output {
+  background-color: transparent !important;
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+  width: auto !important;
+  color: inherit !important;
+  text-align: left !important;
+}
+
+/* Ensure edges look good with dark theme */
+.react-flow__edge-path {
+  stroke: var(--vscode-editorWidget-border, #454545) !important;
+}
+
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke: var(--vscode-focusBorder, #007acc) !important;
+}
+
+/* Controls styling */
+.react-flow__controls {
+  background: var(--vscode-sideBar-background) !important;
+  border: 1px solid var(--vscode-widget-border) !important;
+}
+
+.react-flow__controls-button {
+  background: var(--vscode-button-background) !important;
+  border: none !important;
+  color: var(--vscode-button-foreground) !important;
+}
+
+.react-flow__controls-button:hover {
+  background: var(--vscode-button-hoverBackground) !important;
+}
+
+/* Minimap styling */
+.react-flow__minimap {
+  background: var(--vscode-sideBar-background) !important;
+  border: 1px solid var(--vscode-widget-border) !important;
+}
+
+/* Background pattern */
+.react-flow__background {
+  background: var(--vscode-editor-background) !important;
+}

@@ -4,8 +4,11 @@
  */
 
 import { promises as fs } from 'fs';
+import { watch, FSWatcher } from 'fs';
 import { join, dirname, basename, extname } from 'path';
 import { Logger } from '../utils/Logger';
+import { BrowserWindow } from 'electron';
+import { IPCChannels } from '../../shared/types/ipc.types';
 
 const logger = Logger.getInstance('FileSystemService');
 
@@ -38,6 +41,8 @@ export interface DirectoryListOptions {
 
 export class FileSystemService {
   private static instance: FileSystemService;
+  private watchers: Map<string, FSWatcher> = new Map();
+  private mainWindow: BrowserWindow | null = null;
 
   private constructor() {}
 
@@ -46,6 +51,13 @@ export class FileSystemService {
       FileSystemService.instance = new FileSystemService();
     }
     return FileSystemService.instance;
+  }
+
+  /**
+   * Set the main window for sending events
+   */
+  public setMainWindow(window: BrowserWindow): void {
+    this.mainWindow = window;
   }
 
   /**
@@ -245,5 +257,71 @@ export class FileSystemService {
       logger.error(`Failed to delete directory: ${path}`, error);
       throw new Error(`Failed to delete directory: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
+  }
+
+  /**
+   * Start watching a directory for changes
+   */
+  public watchDirectory(path: string): void {
+    // Stop existing watcher if any
+    this.stopWatching(path);
+
+    try {
+      logger.info(`Starting file system watcher for: ${path}`);
+
+      const watcher = watch(
+        path,
+        { recursive: true },
+        (eventType, filename) => {
+          if (!filename) return;
+
+          logger.debug(`File change detected: ${eventType} - ${filename}`);
+
+          // 发送文件变化事件到渲染进程
+          if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+            this.mainWindow.webContents.send(IPCChannels.FS_WATCH_CHANGE, {
+              eventType, // 'change' 或 'rename'
+              path: join(path, filename),
+              filename,
+              timestamp: Date.now(),
+            });
+          }
+        }
+      );
+
+      watcher.on('error', (error) => {
+        logger.error(`File system watcher error for ${path}:`, error);
+      });
+
+      this.watchers.set(path, watcher);
+      logger.info(`File system watcher started for: ${path}`);
+    } catch (error) {
+      logger.error(`Failed to start file system watcher for ${path}:`, error);
+      throw new Error(`Failed to watch directory: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  /**
+   * Stop watching a directory
+   */
+  public stopWatching(path: string): void {
+    const watcher = this.watchers.get(path);
+    if (watcher) {
+      logger.info(`Stopping file system watcher for: ${path}`);
+      watcher.close();
+      this.watchers.delete(path);
+    }
+  }
+
+  /**
+   * Stop all watchers (cleanup)
+   */
+  public stopAllWatchers(): void {
+    logger.info(`Stopping all file system watchers (${this.watchers.size} active)`);
+    for (const [path, watcher] of this.watchers.entries()) {
+      watcher.close();
+      logger.debug(`Stopped watcher for: ${path}`);
+    }
+    this.watchers.clear();
   }
 }

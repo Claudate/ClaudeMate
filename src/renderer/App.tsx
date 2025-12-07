@@ -6,8 +6,10 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { Routes, Route } from 'react-router-dom';
 import { TitleBar } from './components/layout/TitleBar';
+import { ActivityBar } from './components/layout/ActivityBar';
 import { StatusBar } from './components/layout/StatusBar';
 import { LoadingSpinner } from './components/common/LoadingSpinner';
+import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { AuthWelcome } from './components/auth/AuthWelcome';
 import { useThemeStore } from './stores/themeStore';
 import { useMemoryMonitor } from './hooks/useMemoryMonitor';
@@ -18,6 +20,8 @@ const Assistant = lazy(() => import('./modules/Assistant'));
 const Projects = lazy(() => import('./modules/Projects'));
 const FileExplorer = lazy(() => import('./modules/FileExplorer'));
 const ChatHistory = lazy(() => import('./modules/ChatHistory'));
+const Settings = lazy(() => import('./modules/Settings'));
+const Workflow = lazy(() => import('./modules/Workflow'));
 
 function App() {
   const { theme, initializeTheme } = useThemeStore();
@@ -27,14 +31,18 @@ function App() {
   const [isCheckingCli, setIsCheckingCli] = useState(true);
 
   // Initialize theme on mount
+  // ⭐ 不依赖 initializeTheme 函数引用,因为 Zustand store 的函数每次渲染都会变化
+  // 只在组件挂载时运行一次即可
   useEffect(() => {
     initializeTheme();
-  }, [initializeTheme]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Check Claude CLI availability and authentication on mount
   // 关键优化: 先快速检查 CLI 可用性,再检查认证状态(后台进行)
   useEffect(() => {
     checkClaudeCliAndAuth();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Monitor memory usage
@@ -105,7 +113,7 @@ function App() {
             </div>
             <h1 className="text-3xl font-bold mb-2">未检测到 Claude CLI</h1>
             <p className="text-vscode-foreground-dim text-lg">
-              Claudate 需要 Claude CLI 才能正常工作
+              ClaudeMate 需要 Claude CLI 才能正常工作
             </p>
           </div>
 
@@ -258,29 +266,62 @@ function App() {
     );
   }
 
-  // Claude Code CLI: 如果 CLI 可用则直接进入主界面
-  // 订阅认证已通过浏览器完成，不需要额外的认证流程
+  // ⭐ 显示权限授权UI (首次启动或CLI不可用时)
+  if (!claudeCliAvailable || !isAuthenticated) {
+    const handleLogin = async () => {
+      setIsLoggingIn(true);
+      try {
+        // 调用Claude CLI认证
+        const result = await window.electronAPI.invoke(IPCChannels.CLAUDE_AUTH);
+        if (result.success) {
+          setIsAuthenticated(true);
+        }
+      } catch (error) {
+        console.error('Authentication failed:', error);
+      } finally {
+        setIsLoggingIn(false);
+      }
+    };
 
+    const handleSkip = () => {
+      // 跳过认证，允许用户继续使用（但某些功能不可用）
+      setIsAuthenticated(true);
+    };
+
+    return <AuthWelcome onLoginClick={handleLogin} onSkip={handleSkip} isLoading={isLoggingIn} />;
+  }
+
+  // Claude Code CLI: CLI 可用且已认证，进入主界面
   return (
     <div className="h-screen flex flex-col bg-vscode-editor-bg dark:bg-vscode-editor-bg text-vscode-foreground overflow-hidden">
-      {/* Custom Title Bar with integrated navigation */}
+      {/* ⭐⭐⭐ Custom Title Bar - 不包裹在ErrorBoundary中，确保始终可用 */}
       <TitleBar />
 
-      {/* Main Content */}
-      <main className="flex-1 overflow-hidden">
-        <Suspense fallback={<LoadingSpinner showTip={true} />}>
-          <Routes>
-            <Route path="/" element={<Assistant />} />
-            <Route path="/assistant" element={<Assistant />} />
-            <Route path="/projects" element={<Projects />} />
-            <Route path="/explorer" element={<FileExplorer />} />
-            <Route path="/history" element={<ChatHistory />} />
-          </Routes>
-        </Suspense>
-      </main>
+      {/* ⭐⭐⭐ Main Layout: 使用ErrorBoundary包裹，防止内容错误影响窗口控制 */}
+      <ErrorBoundary>
+        <div className="flex-1 flex overflow-hidden">
+          {/* Left: Activity Bar (VSCode-style vertical navigation) */}
+          <ActivityBar />
 
-      {/* Status Bar */}
-      <StatusBar />
+          {/* Right: Main Content Area */}
+          <main className="flex-1 overflow-hidden">
+            <Suspense fallback={<LoadingSpinner showTip={true} />}>
+              <Routes>
+                <Route path="/" element={<Assistant />} />
+                <Route path="/assistant" element={<Assistant />} />
+                <Route path="/projects" element={<Projects />} />
+                <Route path="/explorer" element={<FileExplorer />} />
+                <Route path="/history" element={<ChatHistory />} />
+                <Route path="/workflow" element={<Workflow />} />
+                <Route path="/settings" element={<Settings />} />
+              </Routes>
+            </Suspense>
+          </main>
+        </div>
+
+        {/* Status Bar */}
+        <StatusBar />
+      </ErrorBoundary>
     </div>
   );
 }

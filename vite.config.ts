@@ -6,6 +6,9 @@ import { resolve } from 'path';
 export default defineConfig({
   plugins: [react()],
 
+  // 使用相对路径,确保打包后的 Electron 应用可以正确加载资源
+  base: './',
+
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src'),

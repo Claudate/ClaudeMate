@@ -13,7 +13,6 @@
  */
 
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
 import { Message } from './chatStore';
 
 /**
@@ -132,12 +131,10 @@ const MAX_TERMINALS = 10; // 最多保留 10 个终端实例
  * saveActiveTerminal(messages, sessionId, isLoading, error);
  * ```
  */
-export const useTerminalStore = create<TerminalStore>()(
-  persist<TerminalStore>(
-    (set, get) => ({
-      terminals: new Map(),
-      activeTerminal: null,
-      sessionIndex: new Map(), // 会话索引
+export const useTerminalStore = create<TerminalStore>()((set, get) => ({
+  terminals: new Map(),
+  activeTerminal: null,
+  sessionIndex: new Map(), // 会话索引
 
       getOrCreateTerminal: (projectPath, projectName) => {
         const state = get();
@@ -220,7 +217,7 @@ export const useTerminalStore = create<TerminalStore>()(
           });
         }
 
-        // 获取或创建新终端
+        // ⭐ 直接使用 getOrCreateTerminal 方法（通过 useTerminalStore.getState()）
         const newTerminal = get().getOrCreateTerminal(projectPath, projectName);
         newTerminal.isActive = true;
         newTerminal.lastAccessedAt = Date.now();
@@ -425,29 +422,4 @@ export const useTerminalStore = create<TerminalStore>()(
 
         console.log(`[TerminalStore] 会话索引已更新: ${metadata.title}`);
       },
-    }),
-    {
-      name: 'terminal-storage', // localStorage key
-      partialize: (state) => ({
-        // 持久化所有终端实例和会话索引，但不持久化 activeTerminal
-        terminals: state.terminals instanceof Map ? Array.from(state.terminals.entries()) : [],
-        sessionIndex: state.sessionIndex instanceof Map ? Array.from(state.sessionIndex.entries()) : [],
-      }),
-      // 反序列化：将数组转回 Map
-      merge: (persistedState: any, currentState: TerminalStore) => {
-        // 确保返回完整的 store 对象，包含所有方法
-        return {
-          ...currentState,
-          terminals: persistedState?.terminals && Array.isArray(persistedState.terminals)
-            ? new Map(persistedState.terminals)
-            : new Map(),
-          sessionIndex: persistedState?.sessionIndex && Array.isArray(persistedState.sessionIndex)
-            ? new Map(persistedState.sessionIndex)
-            : new Map(),
-          // activeTerminal 不持久化，始终为 null
-          activeTerminal: null,
-        };
-      },
-    }
-  )
-);
+}));

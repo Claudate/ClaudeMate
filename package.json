@@ -1,7 +1,7 @@
 {
-  "name": "claudate",
+  "name": "ClaudeMate",
   "version": "1.0.0",
-  "description": "Enterprise-grade Claudate application built with Electron, React, and TypeScript",
+  "description": "Enterprise-grade ClaudeMate application built with Electron, React, and TypeScript",
   "main": "dist/main/index.js",
   "scripts": {
     "dev": "concurrently \"npm run dev:vite\" \"npm run dev:electron\"",
@@ -18,7 +18,12 @@
     "test": "vitest",
     "test:ui": "vitest --ui",
     "preview": "vite preview",
-    "package": "electron-builder",
+    "test:github-connection": "tsx scripts/testGithubConnection.ts",
+    "package": "npm run build && electron-builder --win --x64",
+    "package:win": "npm run build && electron-builder --win --x64",
+    "package:win:portable": "npm run build && electron-builder --win portable --x64",
+    "package:win:nsis": "npm run build && electron-builder --win nsis --x64",
+    "package:dir": "npm run build && electron-builder --dir",
     "postinstall": "electron-builder install-app-deps"
   },
   "keywords": [
@@ -56,6 +61,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.12.0",
+    "@octokit/rest": "^22.0.1",
     "@tailwindcss/typography": "^0.5.19",
     "@vscode/codicons": "^0.0.41",
     "better-sqlite3": "^11.8.1",
@@ -73,19 +79,68 @@
     "react-dom": "^18.2.0",
     "react-markdown": "^10.1.0",
     "react-router-dom": "^7.9.5",
+    "reactflow": "^11.11.4",
     "rehype-highlight": "^7.0.2",
     "remark-gfm": "^4.0.1",
     "zod": "^3.22.4",
     "zustand": "^4.5.0"
   },
   "build": {
+    "appId": "com.ClaudeMate.app",
+    "productName": "ClaudeMate",
+    "copyright": "Copyright © 2025 ClaudeMate",
     "asar": true,
     "files": [
-      "dist/**",
-      "resources/**"
+      "dist/**/*",
+      "node_modules/**/*",
+      "package.json"
     ],
     "directories": {
-      "output": "release"
-    }
+      "output": "build-output1",
+      "buildResources": "resources"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "resources/logo256256.PNG",
+      "artifactName": "${productName}-${version}-${arch}-Setup.${ext}",
+      "requestedExecutionLevel": "asInvoker"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "allowElevation": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "ClaudeMate",
+      "perMachine": false,
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true,
+      "include": "resources/installer.nsh"
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-${arch}-Portable.${ext}"
+    },
+    "extraResources": [
+      {
+        "from": "resources",
+        "to": "resources",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ]
   }
 }

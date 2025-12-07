@@ -7,11 +7,12 @@
  * - 切换项目时自动切换 Claude CLI 会话
  */
 
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { IPCChannels } from '../../../../shared/types/ipc.types';
 import { useProjectStore } from '../../../stores/projectStore';
 import { useChatStore } from '../../../stores/chatStore';
 import { useAppStore } from '../../../stores/appStore';
+import { useFileExplorerStore } from '../../../stores/fileExplorerStore';
 
 interface FileTreeNode {
   name: string;
@@ -35,9 +36,30 @@ interface FileTreeItemProps {
   onToggle: (node: FileTreeNode) => void;
   onContextMenu: (e: React.MouseEvent, node: FileTreeNode) => void;
   selectedPath?: string;
+  onDragStart?: (node: FileTreeNode) => void;
+  onDragEnd?: () => void;
+  onDragOverItem?: (node: FileTreeNode) => void;
+  onDragLeaveItem?: () => void;
+  onDropOnItem?: (targetNode: FileTreeNode) => void;
+  isDragging?: boolean;
+  isDragOver?: boolean;
 }
 
-function FileTreeItem({ node, level, onSelect, onToggle, onContextMenu, selectedPath }: FileTreeItemProps) {
+function FileTreeItem({
+  node,
+  level,
+  onSelect,
+  onToggle,
+  onContextMenu,
+  selectedPath,
+  onDragStart,
+  onDragEnd,
+  onDragOverItem,
+  onDragLeaveItem,
+  onDropOnItem,
+  isDragging,
+  isDragOver
+}: FileTreeItemProps) {
   const isSelected = selectedPath === node.path;
   const paddingLeft = level * 16 + 8;
 
@@ -55,15 +77,55 @@ function FileTreeItem({ node, level, onSelect, onToggle, onContextMenu, selected
     onContextMenu(e, node);
   };
 
+  // ⭐ 拖拽事件处理
+  const handleDragStart = (e: React.DragEvent) => {
+    e.stopPropagation();
+    onDragStart?.(node);
+  };
+
+  const handleDragEnd = (e: React.DragEvent) => {
+    e.stopPropagation();
+    onDragEnd?.();
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    // 只允许拖放到文件夹上
+    if (node.type === 'folder') {
+      onDragOverItem?.(node);
+    }
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.stopPropagation();
+    onDragLeaveItem?.();
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    // 只允许拖放到文件夹上
+    if (node.type === 'folder') {
+      onDropOnItem?.(node);
+    }
+  };
+
   return (
     <>
       <div
+        draggable
         className={`flex items-center gap-1 px-2 py-1 cursor-pointer text-sm hover:bg-vscode-selection-bg/20 ${
           isSelected ? 'bg-vscode-selection-bg/30' : ''
-        }`}
+        } ${isDragging ? 'opacity-50' : ''} ${isDragOver && node.type === 'folder' ? 'bg-vscode-accent/20 ring-1 ring-vscode-accent' : ''}`}
         style={{ paddingLeft: `${paddingLeft}px` }}
         onClick={handleClick}
         onContextMenu={handleContextMenu}
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
       >
         {/* Folder arrow */}
         {node.type === 'folder' && (
@@ -102,6 +164,13 @@ function FileTreeItem({ node, level, onSelect, onToggle, onContextMenu, selected
               onToggle={onToggle}
               onContextMenu={onContextMenu}
               selectedPath={selectedPath}
+              onDragStart={onDragStart}
+              onDragEnd={onDragEnd}
+              onDragOverItem={onDragOverItem}
+              onDragLeaveItem={onDragLeaveItem}
+              onDropOnItem={onDropOnItem}
+              isDragging={isDragging}
+              isDragOver={isDragOver}
             />
           ))}
         </>
@@ -120,14 +189,19 @@ export function FileExplorerPanel({ onFileSelect }: FileExplorerPanelProps) {
   const [rootPath, setRootPath] = useState<string>();
   const [loading, setLoading] = useState(false);
 
+  // ⭐⭐⭐ 保存展开的文件夹路径,用于刷新时恢复状态
+  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
+
   // Project context store (参照 WPF 的 IProjectContext)
   const { currentProject, setCurrentProject } = useProjectStore();
   const { restoreFromTerminal, switchToProject, sendMessage } = useChatStore();  // ⭐ 添加 sendMessage
   const { setCurrentProject: setAppCurrentProject } = useAppStore();
+  const { showHiddenFiles } = useFileExplorerStore();  // ⭐ 添加隐藏文件显示偏好
 
   // Inline input states (VSCode-style)
   const [creatingType, setCreatingType] = useState<'file' | 'folder' | null>(null);
   const [newItemName, setNewItemName] = useState('');
+  const [targetFolderPath, setTargetFolderPath] = useState<string | null>(null); // ⭐ 追踪目标文件夹路径
   const inputRef = useRef<HTMLInputElement>(null);
 
   // ⭐⭐⭐ 右键菜单状态
@@ -141,6 +215,8 @@ export function FileExplorerPanel({ onFileSelect }: FileExplorerPanelProps) {
 
   // ⭐⭐⭐ 拖拽状态
   const [isDraggingOver, setIsDraggingOver] = useState(false);
+  const [draggingNode, setDraggingNode] = useState<FileTreeNode | null>(null); // ⭐ 正在拖动的节点
+  const [dragOverNode, setDragOverNode] = useState<FileTreeNode | null>(null); // ⭐ 拖动悬停的目标节点
 
   // ⭐⭐⭐ 系统剪贴板状态（检测是否有可粘贴的文件）
   const [hasClipboardFiles, setHasClipboardFiles] = useState(false);
@@ -174,6 +250,65 @@ export function FileExplorerPanel({ onFileSelect }: FileExplorerPanelProps) {
       }
     }
   }, []);
+
+  // ⭐⭐⭐ 监听文件系统变化事件,自动刷新文件树
+  useEffect(() => {
+    if (!rootPath) return;
+
+    // 开始监听文件变化
+    window.electronAPI
+      .invoke(IPCChannels.FS_WATCH_START, { path: rootPath })
+      .then(() => {
+        console.log(`[FileExplorer] Started watching: ${rootPath}`);
+      })
+      .catch((error) => {
+        console.error('[FileExplorer] Failed to start file watcher:', error);
+      });
+
+    // ⭐ 防抖:避免短时间内多次刷新
+    let refreshTimer: NodeJS.Timeout | null = null;
+
+    // 监听文件变化事件
+    const handleFileChange = (event: any) => {
+      console.log('[FileExplorer] File change detected:', event);
+
+      // 清除之前的定时器
+      if (refreshTimer) {
+        clearTimeout(refreshTimer);
+      }
+
+      // 延迟刷新,如果300ms内有新的变化,则重新计时
+      refreshTimer = setTimeout(() => {
+        console.log('[FileExplorer] Refreshing file tree...');
+        // ⭐ 刷新时保持展开状态
+        loadDirectory(rootPath, true);
+        refreshTimer = null;
+      }, 300);
+    };
+
+    // 使用 window.electronAPI.on 监听事件
+    const cleanup = window.electronAPI.on(IPCChannels.FS_WATCH_CHANGE, handleFileChange);
+
+    // 清理函数:停止监听
+    return () => {
+      // 清除定时器
+      if (refreshTimer) {
+        clearTimeout(refreshTimer);
+      }
+
+      window.electronAPI
+        .invoke(IPCChannels.FS_WATCH_STOP, { path: rootPath })
+        .then(() => {
+          console.log(`[FileExplorer] Stopped watching: ${rootPath}`);
+        })
+        .catch((error) => {
+          console.error('[FileExplorer] Failed to stop file watcher:', error);
+        });
+
+      // 移除事件监听
+      cleanup();
+    };
+  }, [rootPath]);
 
   // ⭐⭐⭐ 键盘快捷键支持（参照 VSCode）
   useEffect(() => {
@@ -249,23 +384,95 @@ export function FileExplorerPanel({ onFileSelect }: FileExplorerPanelProps) {
 
     try {
       await window.electronAPI.invoke(IPCChannels.FS_DELETE, { path: node.path });
-      await loadDirectory(rootPath!);
+      await loadDirectory(rootPath!, true); // ⭐ 删除后保持展开状态
     } catch (error) {
       console.error('Failed to delete:', error);
       alert(`删除失败: ${error}`);
     }
   };
 
-  const loadDirectory = async (dirPath: string) => {
+  // ⭐ 辅助函数:收集当前展开的文件夹路径
+  const collectExpandedPaths = (nodes: FileTreeNode[]): Set<string> => {
+    const paths = new Set<string>();
+    const traverse = (items: FileTreeNode[]) => {
+      for (const item of items) {
+        if (item.type === 'folder' && item.isExpanded) {
+          paths.add(item.path);
+          if (item.children) {
+            traverse(item.children);
+          }
+        }
+      }
+    };
+    traverse(nodes);
+    return paths;
+  };
+
+  // ⭐ 辅助函数:恢复展开状态
+  const restoreExpandedState = (nodes: FileTreeNode[], expanded: Set<string>): FileTreeNode[] => {
+    return nodes.map(node => {
+      if (node.type === 'folder') {
+        const isExpanded = expanded.has(node.path);
+        return {
+          ...node,
+          isExpanded,
+          children: node.children ? restoreExpandedState(node.children, expanded) : undefined,
+        };
+      }
+      return node;
+    });
+  };
+
+  // ⭐ 使用 useRef 访问最新的 fileTree,避免 useCallback 依赖
+  const fileTreeRef = useRef<FileTreeNode[]>(fileTree);
+
+  const loadDirectory = useCallback(async (dirPath: string, preserveExpandedState: boolean = false) => {
     setLoading(true);
+
+    // ⭐ 刷新时保存当前展开状态 (从 ref 读取最新值)
+    let currentExpandedPaths: Set<string> = new Set();
+    if (preserveExpandedState && fileTreeRef.current.length > 0) {
+      currentExpandedPaths = collectExpandedPaths(fileTreeRef.current);
+    }
+
     try {
       const result = await window.electronAPI.invoke<{
         fileTree: FileTreeNode[];
         rootPath: string;
-      }>(IPCChannels.FS_SCAN_DIRECTORY, { path: dirPath });
+      }>(IPCChannels.FS_SCAN_DIRECTORY, { path: dirPath, showHiddenFiles });
 
       if (result) {
-        setFileTree(result.fileTree);
+        // ⭐ 统计和记录文件信息
+        const countFiles = (nodes: FileTreeNode[]): { total: number; md: number } => {
+          let total = 0;
+          let md = 0;
+          for (const node of nodes) {
+            if (node.type === 'file') {
+              total++;
+              if (node.name.endsWith('.md')) {
+                md++;
+                console.log(`📄 [前端] 找到 .md 文件: ${node.name}`);
+              }
+            }
+            if (node.children) {
+              const childCounts = countFiles(node.children);
+              total += childCounts.total;
+              md += childCounts.md;
+            }
+          }
+          return { total, md };
+        };
+
+        const counts = countFiles(result.fileTree);
+        console.log(`📊 [前端] 收到文件树: 总文件数=${counts.total}, .md文件数=${counts.md}`);
+
+        // ⭐ 恢复展开状态
+        const treeWithExpandedState = preserveExpandedState
+          ? restoreExpandedState(result.fileTree, currentExpandedPaths)
+          : result.fileTree;
+
+        setFileTree(treeWithExpandedState);
+        fileTreeRef.current = treeWithExpandedState; // ⭐ 同步到 ref
         setRootPath(result.rootPath);
 
         // 提取项目名称
@@ -284,11 +491,16 @@ export function FileExplorerPanel({ onFileSelect }: FileExplorerPanelProps) {
         // 而是通过 TerminalInstance 保存/恢复每个项目的聊天历史
         if (currentProject?.path !== result.rootPath) {
           console.log('[FileExplorer] 检测到项目切换，恢复终端历史');
-          // 切换到新项目的终端实例，自动保存当前终端并恢复新终端
-          restoreFromTerminal(result.rootPath, projectName);
+          try {
+            // 切换到新项目的终端实例，自动保存当前终端并恢复新终端
+            restoreFromTerminal(result.rootPath, projectName);
 
-          // ⭐ 切换到项目的会话 ID (支持跨应用重启的会话恢复)
-          switchToProject(result.rootPath);
+            // ⭐ 切换到项目的会话 ID (支持跨应用重启的会话恢复)
+            switchToProject(result.rootPath);
+          } catch (terminalError) {
+            console.error('[FileExplorer] 终端切换失败，但继续加载文件:', terminalError);
+            // 即使终端切换失败，也要继续设置项目
+          }
         }
 
         setCurrentProject(project);
@@ -311,7 +523,17 @@ export function FileExplorerPanel({ onFileSelect }: FileExplorerPanelProps) {
     } finally {
       setLoading(false);
     }
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentProject, restoreFromTerminal, switchToProject, setCurrentProject, setAppCurrentProject, showHiddenFiles]);
+
+  // ⭐ 当隐藏文件显示设置改变时，重新加载当前目录
+  useEffect(() => {
+    if (rootPath) {
+      console.log(`[FileExplorer] 隐藏文件显示设置改变: ${showHiddenFiles}, 重新加载目录`);
+      loadDirectory(rootPath, true); // 保持展开状态
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showHiddenFiles]);
 
   const handleOpenFile = async () => {
     console.log('[FileExplorer] handleOpenFile clicked');
@@ -370,12 +592,13 @@ export function FileExplorerPanel({ onFileSelect }: FileExplorerPanelProps) {
 
   const handleRefresh = () => {
     if (rootPath) {
-      loadDirectory(rootPath);
+      loadDirectory(rootPath, true); // ⭐ 刷新时保持展开状态
     }
   };
 
   const handleCloseFolder = () => {
     setFileTree([]);
+    fileTreeRef.current = []; // ⭐ 同步到 ref
     setRootPath(undefined);
     setSelectedPath(undefined);
     localStorage.removeItem('lastOpenedProject');
@@ -385,6 +608,7 @@ export function FileExplorerPanel({ onFileSelect }: FileExplorerPanelProps) {
     console.log('[FileExplorer] handleCreateFile clicked');
     if (!rootPath) return;
 
+    setTargetFolderPath(rootPath); // ⭐ 在根目录创建
     setCreatingType('file');
     setNewItemName('');
   };
@@ -393,6 +617,7 @@ export function FileExplorerPanel({ onFileSelect }: FileExplorerPanelProps) {
     console.log('[FileExplorer] handleCreateFolder clicked');
     if (!rootPath) return;
 
+    setTargetFolderPath(rootPath); // ⭐ 在根目录创建
     setCreatingType('folder');
     setNewItemName('');
   };
@@ -401,7 +626,9 @@ export function FileExplorerPanel({ onFileSelect }: FileExplorerPanelProps) {
     if (!newItemName.trim() || !rootPath || !creatingType) return;
 
     try {
-      const itemPath = `${rootPath}${rootPath.endsWith('/') || rootPath.endsWith('\\') ? '' : '/'}${newItemName.trim()}`;
+      // ⭐ 使用目标文件夹路径（如果未设置，则使用根目录）
+      const basePath = targetFolderPath || rootPath;
+      const itemPath = `${basePath}${basePath.endsWith('/') || basePath.endsWith('\\') ? '' : '/'}${newItemName.trim()}`;
 
       if (creatingType === 'file') {
         await window.electronAPI.invoke(IPCChannels.FS_CREATE_FILE, {
@@ -414,12 +641,22 @@ export function FileExplorerPanel({ onFileSelect }: FileExplorerPanelProps) {
         });
       }
 
-      // 刷新文件树
-      await loadDirectory(rootPath);
+      // ⭐ 如果在子文件夹下创建，需要确保该文件夹是展开的
+      if (targetFolderPath && targetFolderPath !== rootPath) {
+        setExpandedPaths(prev => {
+          const next = new Set(prev);
+          next.add(targetFolderPath);
+          return next;
+        });
+      }
+
+      // 刷新文件树并保持展开状态
+      await loadDirectory(rootPath, true);
 
       // 重置状态
       setCreatingType(null);
       setNewItemName('');
+      setTargetFolderPath(null);
     } catch (error) {
       console.error(`Failed to create ${creatingType}:`, error);
       alert(`创建${creatingType === 'file' ? '文件' : '文件夹'}失败: ${error}`);
@@ -429,13 +666,25 @@ export function FileExplorerPanel({ onFileSelect }: FileExplorerPanelProps) {
   const handleCancelCreate = () => {
     setCreatingType(null);
     setNewItemName('');
+    setTargetFolderPath(null);
   };
 
   const handleToggle = (node: FileTreeNode) => {
     const toggleNode = (nodes: FileTreeNode[]): FileTreeNode[] => {
       return nodes.map((n) => {
         if (n.path === node.path) {
-          return { ...n, isExpanded: !n.isExpanded };
+          const newExpanded = !n.isExpanded;
+          // ⭐ 更新展开路径集合
+          setExpandedPaths(prev => {
+            const next = new Set(prev);
+            if (newExpanded) {
+              next.add(node.path);
+            } else {
+              next.delete(node.path);
+            }
+            return next;
+          });
+          return { ...n, isExpanded: newExpanded };
         }
         if (n.children) {
           return { ...n, children: toggleNode(n.children) };
@@ -444,15 +693,47 @@ export function FileExplorerPanel({ onFileSelect }: FileExplorerPanelProps) {
       });
     };
 
-    setFileTree(toggleNode(fileTree));
+    const newTree = toggleNode(fileTree);
+    setFileTree(newTree);
+    fileTreeRef.current = newTree; // ⭐ 同步到 ref
   };
 
-  const handleSelect = (node: FileTreeNode) => {
+  const handleSelect = async (node: FileTreeNode) => {
     console.log('[FileExplorer] File selected', {
       name: node.name,
       path: node.path,
       type: node.type,
     });
+
+    // ⭐⭐⭐ 禁止打开压缩文件
+    const compressedExtensions = ['.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.xz', '.tar.gz', '.tgz', '.tar.bz2', '.tbz2'];
+    const fileExtension = node.name.toLowerCase().substring(node.name.lastIndexOf('.'));
+    if (compressedExtensions.includes(fileExtension)) {
+      alert(`不支持打开压缩文件: ${node.name}\n\n支持的操作:\n- 在文件资源管理器中查看\n- 解压后查看内容`);
+      return;
+    }
+
+    // ⭐⭐⭐ 检查文件大小，防止打开过大文件导致卡死
+    try {
+      const stats = await window.electronAPI.invoke(IPCChannels.FS_GET_FILE_STATS, { path: node.path });
+      if (stats && stats.size) {
+        const fileSizeInMB = stats.size / (1024 * 1024);
+        const MAX_FILE_SIZE_MB = 10; // 10MB 限制
+
+        if (fileSizeInMB > MAX_FILE_SIZE_MB) {
+          const shouldOpen = confirm(
+            `文件较大 (${fileSizeInMB.toFixed(2)} MB)，打开可能导致应用卡顿。\n\n是否继续打开？\n\n建议:\n- 文件大于 ${MAX_FILE_SIZE_MB}MB 时使用外部编辑器\n- 或在文件资源管理器中查看`
+          );
+          if (!shouldOpen) {
+            return;
+          }
+        }
+      }
+    } catch (error) {
+      console.warn('[FileExplorer] Failed to check file size:', error);
+      // 如果无法获取文件大小，仍然允许打开（可能是特殊文件）
+    }
+
     setSelectedPath(node.path);
     onFileSelect(node);
   };
@@ -501,19 +782,19 @@ export function FileExplorerPanel({ onFileSelect }: FileExplorerPanelProps) {
     }
   };
 
-  // 复制（使用 useCallback 优化性能）
-  const handleCopy = useCallback(() => {
+  // 复制
+  const handleCopy = () => {
     if (!contextMenu.node) return;
     setClipboard({ node: contextMenu.node, operation: 'copy' });
     setContextMenu({ visible: false, x: 0, y: 0, node: null });
-  }, [contextMenu.node]);
+  };
 
-  // 剪切（使用 useCallback 优化性能）
-  const handleCut = useCallback(() => {
+  // 剪切
+  const handleCut = () => {
     if (!contextMenu.node) return;
     setClipboard({ node: contextMenu.node, operation: 'cut' });
     setContextMenu({ visible: false, x: 0, y: 0, node: null });
-  }, [contextMenu.node]);
+  };
 
   // ⭐⭐⭐ 从系统剪贴板粘贴文件（支持外部文件）
   const handlePasteFromSystem = async () => {
@@ -528,8 +809,8 @@ export function FileExplorerPanel({ onFileSelect }: FileExplorerPanelProps) {
         targetDir,
       });
 
-      // 刷新文件树
-      await loadDirectory(rootPath);
+      // 刷新文件树并保持展开状态
+      await loadDirectory(rootPath, true);
       setContextMenu({ visible: false, x: 0, y: 0, node: null });
     } catch (error) {
       console.error('Failed to paste from system:', error);
@@ -560,8 +841,8 @@ export function FileExplorerPanel({ onFileSelect }: FileExplorerPanelProps) {
         setClipboard(null);
       }
 
-      // 刷新文件树
-      await loadDirectory(rootPath);
+      // 刷新文件树并保持展开状态
+      await loadDirectory(rootPath, true);
       setContextMenu({ visible: false, x: 0, y: 0, node: null });
     } catch (error) {
       console.error('Failed to paste:', error);
@@ -581,9 +862,9 @@ export function FileExplorerPanel({ onFileSelect }: FileExplorerPanelProps) {
         path: contextMenu.node.path,
       });
 
-      // 刷新文件树
+      // 刷新文件树并保持展开状态
       if (rootPath) {
-        await loadDirectory(rootPath);
+        await loadDirectory(rootPath, true);
       }
       setContextMenu({ visible: false, x: 0, y: 0, node: null });
     } catch (error) {
@@ -612,13 +893,19 @@ export function FileExplorerPanel({ onFileSelect }: FileExplorerPanelProps) {
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    setIsDraggingOver(true);
+    // ⭐ 只有外部拖拽时才显示提示（内部拖拽时 draggingNode 不为 null）
+    if (!draggingNode) {
+      setIsDraggingOver(true);
+    }
   };
 
   const handleDragEnter = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    setIsDraggingOver(true);
+    // ⭐ 只有外部拖拽时才显示提示
+    if (!draggingNode) {
+      setIsDraggingOver(true);
+    }
   };
 
   const handleDragLeave = (e: React.DragEvent) => {
@@ -662,11 +949,97 @@ export function FileExplorerPanel({ onFileSelect }: FileExplorerPanelProps) {
 
       console.log('[FileExplorer] 文件复制成功:', result);
 
-      // 刷新文件树
-      await loadDirectory(rootPath);
+      // 刷新文件树并保持展开状态
+      await loadDirectory(rootPath, true);
     } catch (error) {
       console.error('拖拽文件失败:', error);
       alert(`拖拽文件失败: ${error}`);
+    }
+  };
+
+  // ⭐⭐⭐ 内部拖拽事件处理器（文件树内部拖动）
+  const handleItemDragStart = (node: FileTreeNode) => {
+    console.log('[FileExplorer] 开始拖动:', node.name);
+    setDraggingNode(node);
+  };
+
+  const handleItemDragEnd = () => {
+    console.log('[FileExplorer] 结束拖动');
+    setDraggingNode(null);
+    setDragOverNode(null);
+    setIsDraggingOver(false); // ⭐ 重置外部拖拽状态
+  };
+
+  const handleItemDragOver = (targetNode: FileTreeNode) => {
+    // 只有当目标节点是文件夹且不是正在拖动的节点本身时才设置
+    if (targetNode.type === 'folder' && draggingNode && targetNode.path !== draggingNode.path) {
+      setDragOverNode(targetNode);
+    }
+  };
+
+  const handleItemDragLeave = () => {
+    setDragOverNode(null);
+  };
+
+  const handleItemDrop = async (targetNode: FileTreeNode) => {
+    console.log('[FileExplorer] 拖放到:', targetNode.name);
+
+    if (!draggingNode || !rootPath) {
+      console.warn('[FileExplorer] 拖放失败: 缺少必要信息');
+      return;
+    }
+
+    // 不能拖动到自己身上
+    if (draggingNode.path === targetNode.path) {
+      console.warn('[FileExplorer] 不能拖动到自己身上');
+      setDraggingNode(null);
+      setDragOverNode(null);
+      return;
+    }
+
+    // 不能拖动文件夹到自己的子文件夹
+    if (draggingNode.type === 'folder' && targetNode.path.startsWith(draggingNode.path)) {
+      console.warn('[FileExplorer] 不能拖动文件夹到自己的子文件夹');
+      alert('不能将文件夹移动到自己的子文件夹中');
+      setDraggingNode(null);
+      setDragOverNode(null);
+      return;
+    }
+
+    try {
+      const targetDir = targetNode.type === 'folder' ? targetNode.path : rootPath;
+      const newPath = `${targetDir}${targetDir.endsWith('/') || targetDir.endsWith('\\') ? '' : '/'}${draggingNode.name}`;
+
+      console.log('[FileExplorer] 移动文件:', {
+        from: draggingNode.path,
+        to: newPath,
+      });
+
+      // 调用移动文件/文件夹的 IPC
+      await window.electronAPI.invoke(IPCChannels.FS_MOVE, {
+        source: draggingNode.path,
+        destination: newPath,
+      });
+
+      console.log('[FileExplorer] 移动成功');
+
+      // ⭐ 确保目标文件夹是展开的
+      if (targetNode.type === 'folder') {
+        setExpandedPaths(prev => {
+          const next = new Set(prev);
+          next.add(targetNode.path);
+          return next;
+        });
+      }
+
+      // 刷新文件树并保持展开状态
+      await loadDirectory(rootPath, true);
+    } catch (error) {
+      console.error('[FileExplorer] 移动失败:', error);
+      alert(`移动失败: ${error}`);
+    } finally {
+      setDraggingNode(null);
+      setDragOverNode(null);
     }
   };
 
@@ -678,24 +1051,8 @@ export function FileExplorerPanel({ onFileSelect }: FileExplorerPanelProps) {
           资源管理器
         </span>
         <div className="flex items-center gap-1 relative z-50">
-          {!rootPath ? (
-            <>
-              <button
-                className="p-1 hover:bg-vscode-selection-bg/20 rounded pointer-events-auto relative z-50"
-                title="打开文件"
-                onClick={handleOpenFile}
-              >
-                <i className="codicon codicon-file-add text-sm" />
-              </button>
-              <button
-                className="p-1 hover:bg-vscode-selection-bg/20 rounded pointer-events-auto relative z-50"
-                title="打开文件夹"
-                onClick={handleOpenFolder}
-              >
-                <i className="codicon codicon-folder-opened text-sm" />
-              </button>
-            </>
-          ) : (
+          {/* ⭐ 只要打开了文件夹就显示工具栏按钮（不管文件夹是否为空） */}
+          {rootPath ? (
             <>
               <button
                 className="p-1 hover:bg-vscode-selection-bg/20 rounded pointer-events-auto relative z-50"
@@ -727,7 +1084,7 @@ export function FileExplorerPanel({ onFileSelect }: FileExplorerPanelProps) {
                 <i className="codicon codicon-close text-sm" />
               </button>
             </>
-          )}
+          ) : null}
         </div>
       </div>
 
@@ -760,8 +1117,8 @@ export function FileExplorerPanel({ onFileSelect }: FileExplorerPanelProps) {
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
       >
-        {/* ⭐⭐⭐ 拖拽提示覆盖层 */}
-        {isDraggingOver && (
+        {/* ⭐⭐⭐ 拖拽提示覆盖层（外部文件拖入时显示 - 外部文件只能复制不能移动） */}
+        {isDraggingOver && !draggingNode && (
           <div className="absolute inset-0 flex items-center justify-center bg-vscode-editor-bg/90 z-10 pointer-events-none">
             <div className="flex flex-col items-center gap-2 text-vscode-accent">
               <i className="codicon codicon-arrow-down text-4xl animate-bounce" />
@@ -775,9 +1132,9 @@ export function FileExplorerPanel({ onFileSelect }: FileExplorerPanelProps) {
             <i className="codicon codicon-loading animate-spin mr-2" />
             加载中...
           </div>
-        ) : fileTree.length > 0 ? (
+        ) : (
           <>
-            {/* Inline Input for Creating New File/Folder (VSCode-style) */}
+            {/* ⭐ 创建文件/文件夹的内联输入框 - 无论文件夹是否为空都显示 */}
             {creatingType && (
               <div className="flex items-center gap-1 px-2 py-1 text-sm bg-vscode-selection-bg/10" style={{ paddingLeft: '8px' }}>
                 <i className={`codicon ${creatingType === 'folder' ? 'codicon-folder' : 'codicon-file'} text-base`} />
@@ -801,41 +1158,57 @@ export function FileExplorerPanel({ onFileSelect }: FileExplorerPanelProps) {
             )}
 
             {/* File Tree */}
-            {fileTree.map((node) => (
-              <FileTreeItem
-                key={node.path}
-                node={node}
-                level={0}
-                onSelect={handleSelect}
-                onToggle={handleToggle}
-                onContextMenu={handleContextMenu}
-                selectedPath={selectedPath}
-              />
-            ))}
+            {fileTree.length > 0 ? (
+              fileTree.map((node) => (
+                <FileTreeItem
+                  key={node.path}
+                  node={node}
+                  level={0}
+                  onSelect={handleSelect}
+                  onToggle={handleToggle}
+                  onContextMenu={handleContextMenu}
+                  selectedPath={selectedPath}
+                  onDragStart={handleItemDragStart}
+                  onDragEnd={handleItemDragEnd}
+                  onDragOverItem={handleItemDragOver}
+                  onDragLeaveItem={handleItemDragLeave}
+                  onDropOnItem={handleItemDrop}
+                  isDragging={draggingNode?.path === node.path}
+                  isDragOver={dragOverNode?.path === node.path}
+                />
+              ))
+            ) : (
+              // ⭐ 空文件夹提示 - 只在没有创建新项目时显示
+              !creatingType && (
+                <div className="flex flex-col items-center justify-center h-full p-4 text-center">
+                  <i className="codicon codicon-folder-opened text-4xl text-vscode-foreground-dim mb-4" />
+                  <p className="text-sm text-vscode-foreground-dim mb-4">
+                    {rootPath ? '文件夹为空' : '还没有打开任何文件或文件夹'}
+                  </p>
+                  {/* ⭐ 如果没有打开文件夹，显示"打开文件"和"打开文件夹"按钮 */}
+                  {/* ⭐ 如果打开了空文件夹，只显示"打开文件夹"按钮(用于重新选择) */}
+                  {!rootPath ? (
+                    <div className="flex gap-2">
+                      <button
+                        className="px-4 py-2 bg-vscode-button-bg hover:bg-vscode-button-hover text-vscode-button-fg rounded text-sm flex items-center justify-center gap-2"
+                        onClick={handleOpenFile}
+                      >
+                        <i className="codicon codicon-file" />
+                        打开文件
+                      </button>
+                      <button
+                        className="px-4 py-2 bg-vscode-button-bg hover:bg-vscode-button-hover text-vscode-button-fg rounded text-sm flex items-center justify-center gap-2"
+                        onClick={handleOpenFolder}
+                      >
+                        <i className="codicon codicon-folder-opened" />
+                        打开文件夹
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              )
+            )}
           </>
-        ) : (
-          <div className="flex flex-col items-center justify-center h-full p-4 text-center">
-            <i className="codicon codicon-folder-opened text-4xl text-vscode-foreground-dim mb-4" />
-            <p className="text-sm text-vscode-foreground-dim mb-4">
-              还没有打开任何文件或文件夹
-            </p>
-            <div className="flex flex-col gap-2 w-full max-w-xs">
-              <button
-                className="px-4 py-2 bg-vscode-button-bg hover:bg-vscode-button-hover text-vscode-button-fg rounded text-sm flex items-center justify-center gap-2"
-                onClick={handleOpenFolder}
-              >
-                <i className="codicon codicon-folder-opened" />
-                打开文件夹
-              </button>
-              <button
-                className="px-4 py-2 bg-vscode-button-secondary-bg hover:bg-vscode-button-secondary-hover text-vscode-button-secondary-fg rounded text-sm flex items-center justify-center gap-2"
-                onClick={handleOpenFile}
-              >
-                <i className="codicon codicon-file-add" />
-                打开文件
-              </button>
-            </div>
-          </div>
         )}
       </div>
 
@@ -860,6 +1233,9 @@ export function FileExplorerPanel({ onFileSelect }: FileExplorerPanelProps) {
           <button
             className="w-full px-3 py-1.5 text-left text-sm hover:bg-vscode-selection-bg/20 flex items-center gap-2"
             onClick={() => {
+              // ⭐ 如果右键点击的是文件夹，就在该文件夹下创建；否则在根目录创建
+              const targetPath = contextMenu.node?.type === 'folder' ? contextMenu.node.path : rootPath;
+              setTargetFolderPath(targetPath || null);
               setContextMenu({ visible: false, x: 0, y: 0, node: null });
               setCreatingType('file');
               setNewItemName('');
@@ -873,6 +1249,9 @@ export function FileExplorerPanel({ onFileSelect }: FileExplorerPanelProps) {
           <button
             className="w-full px-3 py-1.5 text-left text-sm hover:bg-vscode-selection-bg/20 flex items-center gap-2"
             onClick={() => {
+              // ⭐ 如果右键点击的是文件夹，就在该文件夹下创建；否则在根目录创建
+              const targetPath = contextMenu.node?.type === 'folder' ? contextMenu.node.path : rootPath;
+              setTargetFolderPath(targetPath || null);
               setContextMenu({ visible: false, x: 0, y: 0, node: null });
               setCreatingType('folder');
               setNewItemName('');

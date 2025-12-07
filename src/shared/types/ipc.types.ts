@@ -29,6 +29,10 @@ export const IPCChannels = {
   FS_COPY: 'fs:copy', // 复制文件或文件夹
   FS_MOVE: 'fs:move', // 移动文件或文件夹
   FS_REVEAL_IN_EXPLORER: 'fs:reveal-in-explorer', // 在文件管理器中显示
+  FS_GET_FILE_STATS: 'fs:get-file-stats', // 获取文件统计信息（大小、修改时间等）
+  FS_WATCH_START: 'fs:watch-start', // 开始监听目录变化
+  FS_WATCH_STOP: 'fs:watch-stop', // 停止监听目录变化
+  FS_WATCH_CHANGE: 'fs:watch-change', // 文件变化事件 (Main -> Renderer)
 
   // Shell operations
   SHELL_OPEN_URL: 'shell:open-url',
@@ -85,6 +89,13 @@ export const IPCChannels = {
   HISTORY_DELETE_PROJECT_MESSAGES: 'history:delete-project-messages',   // 删除项目历史（IndexedDB）
   HISTORY_GET_STATS: 'history:get-stats',                               // 获取统计信息（IndexedDB）
   HISTORY_CLEAR_ALL: 'history:clear-all',                               // 清空所有历史
+  HISTORY_CLEAR_ALL_PROJECTS: 'history:clear-all-projects',             // ⭐⭐⭐ 清空所有项目的历史数据（JSONL + IndexedDB）
+
+  // ⭐⭐⭐ Claude Code Import (导入 Claude Code CLI 的聊天历史)
+  CLAUDE_CODE_DETECT: 'claude-code:detect',                             // 检测 Claude Code 数据
+  CLAUDE_CODE_PREVIEW: 'claude-code:preview',                           // 预览导入数据（不实际导入）
+  CLAUDE_CODE_IMPORT_ALL: 'claude-code:import-all',                     // 导入所有会话
+  CLAUDE_CODE_IMPORT_PROGRESS: 'claude-code:import-progress',           // 导入进度事件 (Main -> Renderer)
 
   // Settings
   SETTINGS_GET: 'settings:get',
@@ -99,6 +110,29 @@ export const IPCChannels = {
   WORKFLOW_DELETE: 'workflow:delete',
   WORKFLOW_EXECUTE: 'workflow:execute',
   WORKFLOW_CANCEL: 'workflow:cancel',
+
+  // ⭐ Workflow Auto-Generation
+  WORKFLOW_GENERATE_FROM_CONVERSATION: 'workflow:generate-from-conversation',
+  WORKFLOW_GET_BY_PROJECT: 'workflow:get-by-project',  // 获取项目相关的工作流
+
+  // ⭐ Skill management
+  SKILL_GET_ALL: 'skill:get-all',  // 获取所有可用的 Skills
+  SKILL_LOAD: 'skill:load',        // 加载指定 Skill 到 Assistant
+
+  // 🆕 GitHub Sync
+  GITHUB_SYNC_MANUAL: 'github:sync-manual',                       // 手动触发同步
+  GITHUB_SYNC_STATUS: 'github:sync-status',                       // 获取同步状态
+  GITHUB_SYNC_CONFIGURE: 'github:sync-configure',                 // 配置 GitHub 同步
+  GITHUB_SYNC_TEST_CONNECTION: 'github:sync-test-connection',     // 测试 GitHub 连接
+  GITHUB_GET_GIT_STATUS: 'github:get-git-status',                 // 获取 Git 状态
+  GITHUB_INIT_REPOSITORY: 'github:init-repository',               // 初始化 Git 仓库
+  GITHUB_ADD_REMOTE: 'github:add-remote',                         // 添加远程仓库
+  GITHUB_GET_SYNC_HISTORY: 'github:get-sync-history',             // 获取同步历史
+  GITHUB_GET_SYNC_HISTORY_BY_PROJECT: 'github:get-sync-history-by-project', // 根据项目获取同步历史
+  GITHUB_SYNC_STARTED: 'github:sync-started',                     // 同步开始事件 (Main -> Renderer)
+  GITHUB_SYNC_COMPLETED: 'github:sync-completed',                 // 同步完成事件 (Main -> Renderer)
+  GITHUB_SYNC_FAILED: 'github:sync-failed',                       // 同步失败事件 (Main -> Renderer)
+  GITHUB_SYNC_PROGRESS: 'github:sync-progress',                   // 同步进度事件 (Main -> Renderer)
 
   // Theme
   THEME_GET: 'theme:get',
@@ -301,4 +335,36 @@ export const HistoryUpdateTitleSchema = z.object({
   projectPath: z.string().min(1),
   sessionId: z.string().min(1),
   newTitle: z.string().min(1),
+});
+
+// ⭐ Workflow Auto-Generation Schemas
+export const WorkflowGenerateFromConversationSchema = z.object({
+  messages: z.array(z.object({
+    id: z.string(),
+    role: z.enum(['user', 'assistant']),
+    content: z.string(),
+    timestamp: z.number(),
+    toolUses: z.array(z.object({
+      name: z.string(),
+      input: z.record(z.any()),
+      output: z.any().optional(),
+      timestamp: z.number(),
+    })).optional(),
+  })),
+  projectPath: z.string().optional(),
+  projectName: z.string().optional(),
+  existingWorkflowId: z.string().optional(),  // 如果存在，则更新而不是创建
+});
+
+export const WorkflowGetByProjectSchema = z.object({
+  projectPath: z.string().min(1),
+});
+
+// ⭐ Skill Schemas
+export const SkillGetAllSchema = z.object({
+  projectPath: z.string().optional(),
+});
+
+export const SkillLoadSchema = z.object({
+  skillId: z.string().min(1),
 });

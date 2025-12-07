@@ -60,6 +60,9 @@ interface ChatState {
   totalTokens: number;
   sessionWarningShown: boolean;
 
+  // ⭐ Cancelling flag (标记会话正在被取消，忽略后续的错误事件)
+  isCancelling: boolean;
+
   // ⭐ Tool Permission (工具授权)
   permissionRequest: ToolPermissionRequest | null;
   permissionMode: 'manual' | 'auto';  // 授权模式 (默认 manual)
@@ -107,6 +110,12 @@ interface ChatState {
   // ⭐ Project-Session Management (项目会话管理)
   getOrCreateSessionForProject: (projectPath: string) => string;
   switchToProject: (projectPath: string | null) => Promise<void>;
+
+  // ⭐⭐⭐ Workflow Auto-Generation (工作流自动生成)
+  generateWorkflowFromCurrentSession: () => Promise<void>;
+
+  // ⭐ Cancel Session (取消当前会话，重置 loading 状态)
+  cancelSession: () => void;
 }
 
 export const useChatStore = create<ChatState>()(
@@ -118,6 +127,7 @@ export const useChatStore = create<ChatState>()(
     error: null,
     totalTokens: 0,
     sessionWarningShown: false,
+    isCancelling: false,  // ⭐ 初始状态
 
     // ⭐ Tool Permission 初始状态
     permissionRequest: null,
@@ -213,7 +223,8 @@ export const useChatStore = create<ChatState>()(
       set((state) => {
         state.messages.push(userMessage);
         state.error = null;
-        // 不设置 isLoading = true，允许立即发送下一条消息
+        state.isLoading = true; // ✅ 设置加载状态，显示"正在回复"指示器
+        state.isCancelling = false;  // ⭐ 重置取消标志
       });
 
       // Create assistant message placeholder
@@ -284,6 +295,9 @@ export const useChatStore = create<ChatState>()(
             if (data.sessionId === get().currentSessionId) {
               const { type, content: chunkContent, tokenUsage } = data.chunk;
 
+              // ⭐ 诊断日志：追踪所有流式事件
+              console.log(`[ChatStore] 📨 收到流式事件: type=${type}, sessionId=${data.sessionId.substring(0, 8)}...`);
+
               if (type === 'text') {
                 set((state) => {
                   const msg = state.messages.find((m) => m.id === assistantMessageId);
@@ -292,15 +306,33 @@ export const useChatStore = create<ChatState>()(
                   }
                 });
               } else if (type === 'tool_use') {
-                // 显示工具调用信息
+                // 优化工具调用显示：合并重复调用,只显示摘要
                 set((state) => {
                   const msg = state.messages.find((m) => m.id === assistantMessageId);
                   if (msg) {
-                    // 在消息内容中添加工具调用信息（用特殊格式标记）
-                    msg.content += `\n🔧 ${chunkContent}\n`;
+                    // 解析工具名称
+                    const toolMatch = chunkContent.match(/^(\w+)/);
+                    const toolName = toolMatch ? toolMatch[1] : chunkContent;
+
+                    // 检查是否已经有相同工具的调用记录
+                    const toolCallPattern = new RegExp(`${toolName}\\s*(?:\\(\\d+\\))?$`, 'm');
+                    const existingToolCall = msg.content.match(toolCallPattern);
+
+                    if (existingToolCall) {
+                      // 如果已经有相同工具调用,增加计数
+                      const countMatch = existingToolCall[0].match(/\((\d+)\)/);
+                      const count = countMatch ? parseInt(countMatch[1]) + 1 : 2;
+                      msg.content = msg.content.replace(
+                        toolCallPattern,
+                        `${toolName} (${count})`
+                      );
+                    } else {
+                      msg.content += `${toolName}\n`;
+                    }
                   }
                 });
               } else if (type === 'done') {
+                console.log('[ChatStore] 🎉 收到 done 事件，准备保存会话');
                 set((state) => {
                   const msg = state.messages.find((m) => m.id === assistantMessageId);
                   if (msg) {
@@ -324,16 +356,48 @@ export const useChatStore = create<ChatState>()(
                       console.log(`[ChatStore] Token 使用: Input=${msg.tokenUsage.inputTokens}, Output=${msg.tokenUsage.outputTokens}, Total=${msg.tokenUsage.totalTokens}`);
                     }
                   }
-                  // 不需要设置 isLoading = false，因为从未设置为 true
+                  state.isLoading = false; // ✅ 对话完成，关闭加载状态
                 });
 
                 // 对话完成后，检查是否需要生成智能标题并保存会话
                 // 参照 WPF 的 AddMessageToSessionAsync 逻辑
-                get().saveSessionIfNeeded();
+                console.log('[ChatStore] 🔄 调用 saveSessionIfNeeded...');
+                get().saveSessionIfNeeded().then(() => {
+                  console.log('[ChatStore] ✅ saveSessionIfNeeded 完成');
+                }).catch((error) => {
+                  console.error('[ChatStore] ❌ saveSessionIfNeeded 失败:', error);
+                });
 
                 unsubscribe();
                 unsubscribePermission();
               } else if (type === 'error') {
+                // ⭐ 如果正在取消会话，忽略错误事件（避免显示"进程异常退出"）
+                const { isCancelling } = get();
+                if (isCancelling) {
+                  console.log('[ChatStore] 会话正在取消，忽略错误事件（但继续接收数据）');
+                  // ⭐ 不要 unsubscribe，继续接收可能的数据
+                  // 标记消息为非流式状态，并保存已接收的数据
+                  set((state) => {
+                    const msg = state.messages.find((m) => m.id === assistantMessageId);
+                    if (msg) {
+                      msg.isStreaming = false;
+                    }
+                    state.isLoading = false;
+                  });
+
+                  // ⭐ 立即保存已接收的数据（暂停之前的内容）
+                  console.log('[ChatStore] 🔄 保存暂停前的数据...');
+                  get().saveSessionIfNeeded().then(() => {
+                    console.log('[ChatStore] ✅ 暂停前的数据已保存');
+                  }).catch((error) => {
+                    console.error('[ChatStore] ❌ 保存暂停前的数据失败:', error);
+                  });
+
+                  unsubscribe();
+                  unsubscribePermission();
+                  return;
+                }
+
                 set((state) => {
                   const msg = state.messages.find((m) => m.id === assistantMessageId);
                   if (msg) {
@@ -341,6 +405,7 @@ export const useChatStore = create<ChatState>()(
                     msg.isStreaming = false;
                   }
                   state.error = chunkContent;
+                  state.isLoading = false;
                 });
                 unsubscribe();
                 unsubscribePermission();
@@ -473,28 +538,62 @@ export const useChatStore = create<ChatState>()(
 
       // 先保存当前状态
       const { messages, currentSessionId, isLoading, error } = get();
-      const terminalStore = useTerminalStore.getState();
 
-      if (!terminalStore) {
-        console.error('[ChatStore] TerminalStore 未初始化');
+      // ⭐⭐⭐ 安全地获取 terminalStore
+      let terminalStore;
+      try {
+        terminalStore = useTerminalStore.getState();
+      } catch (storeError) {
+        console.error('[ChatStore] ❌ 获取 TerminalStore 失败:', storeError);
+        console.error('[ChatStore] 终端切换失败，但继续加载文件');
         return;
       }
 
-      terminalStore.saveActiveTerminal(messages, currentSessionId, isLoading, error);
+      // ⭐⭐⭐ 全面的 null/undefined 检查
+      if (!terminalStore) {
+        console.error('[ChatStore] ❌ TerminalStore 未正确初始化 - getState() 返回了 null/undefined');
+        console.error('[ChatStore] 终端切换失败，但继续加载文件');
+        return;
+      }
 
-      // 切换到新终端
-      const terminal = terminalStore.switchToTerminal(projectPath, projectName);
+      // ⭐⭐⭐ 验证所有必需的方法存在且为函数
+      const requiredMethods = ['switchToTerminal', 'saveActiveTerminal', 'getOrCreateTerminal'];
+      for (const methodName of requiredMethods) {
+        if (typeof (terminalStore as any)[methodName] !== 'function') {
+          console.error(`[ChatStore] ❌ ${methodName} 方法不存在或不是函数`);
+          console.error('[ChatStore] terminalStore 可用的键:', Object.keys(terminalStore));
+          console.error('[ChatStore] 终端切换失败，但继续加载文件');
+          return;
+        }
+      }
 
-      // 恢复新终端的状态
-      set((state) => {
-        state.messages = terminal.messages;
-        state.currentSessionId = terminal.currentSessionId;
-        state.isLoading = terminal.isLoading;
-        state.error = terminal.error;
-        state.sessionWarningShown = false; // 重置警告状态
-      });
+      // ⭐⭐⭐ 所有验证通过，执行终端切换
+      try {
+        terminalStore.saveActiveTerminal(messages, currentSessionId, isLoading, error);
 
-      console.log(`[ChatStore] 已恢复终端: ${projectName}, 消息数: ${terminal.messages.length}`);
+        // 切换到新终端
+        const terminal = terminalStore.switchToTerminal(projectPath, projectName);
+
+        // ⭐ 验证返回的 terminal 对象
+        if (!terminal) {
+          console.error('[ChatStore] ❌ switchToTerminal 返回了 null/undefined');
+          return;
+        }
+
+        // 恢复新终端的状态
+        set((state) => {
+          state.messages = terminal.messages || [];
+          state.currentSessionId = terminal.currentSessionId || generateUUID();
+          state.isLoading = terminal.isLoading || false;
+          state.error = terminal.error || null;
+          state.sessionWarningShown = false; // 重置警告状态
+        });
+
+        console.log(`[ChatStore] ✅ 已恢复终端: ${projectName}, 消息数: ${terminal.messages?.length || 0}`);
+      } catch (switchError) {
+        console.error('[ChatStore] ❌ 终端切换过程中发生错误:', switchError);
+        console.error('[ChatStore] 终端切换失败，但继续加载文件');
+      }
     },
 
     /**
@@ -630,6 +729,7 @@ export const useChatStore = create<ChatState>()(
       }
 
       // 计算会话持续时间
+      console.log('[ChatStore] 📊 开始构建会话数据...');
       const firstMessageTime = messages[0]?.timestamp || Date.now();
       const lastMessageTime = messages[messages.length - 1]?.timestamp || Date.now();
       const duration = lastMessageTime - firstMessageTime;
@@ -637,6 +737,14 @@ export const useChatStore = create<ChatState>()(
       // 计算会话数据大小（估算）
       const sessionJson = JSON.stringify({ messages, totalTokens });
       const fileSize = new Blob([sessionJson]).size;
+
+      console.log('[ChatStore] 📊 会话元数据:', {
+        messageCount: messages.length,
+        userMessages: userMessages.length,
+        duration,
+        fileSize,
+        sessionTitle,
+      });
 
       // 构建会话数据
       const sessionData: SessionData = {
@@ -659,6 +767,8 @@ export const useChatStore = create<ChatState>()(
         workingDirectory: currentProject.path, // 工作目录
       };
 
+      console.log('[ChatStore] ✅ 会话数据构建完成，sessionId:', currentSessionId);
+
       // 保存到 TerminalStore
       try {
         const terminalStore = useTerminalStore.getState();
@@ -674,7 +784,9 @@ export const useChatStore = create<ChatState>()(
 
       // 💾 保存到 SessionStorageService（History 功能）
       // 参照 WPF 的 AddMessageToSessionAsync 逻辑
+      console.log('[ChatStore] 🔍 开始 History 保存流程...');
       try {
+        console.log('[ChatStore] 🔍 准备检查会话是否存在...');
         // 检查会话是否已存在
         let session = await window.electronAPI.invoke(IPCChannels.HISTORY_GET_SESSION, {
           projectPath: currentProject.path,
@@ -706,30 +818,62 @@ export const useChatStore = create<ChatState>()(
 
         // 逐条保存新消息（只保存未保存的消息）
         const savedMessageIds = new Set(session.messages?.map((m: any) => m.id) || []);
+        console.log(`[ChatStore] 📊 当前会话状态:`, {
+          sessionId: currentSessionId,
+          totalMessages: messages.length,
+          savedMessages: savedMessageIds.size,
+          newMessages: messages.length - savedMessageIds.size,
+        });
+
+        let savedCount = 0;
+        let skippedCount = 0;
 
         for (const message of messages) {
           if (!savedMessageIds.has(message.id)) {
-            console.log(`[ChatStore] 💾 准备保存消息: ${message.id}, sessionId: ${currentSessionId}`);
+            console.log(`[ChatStore] 💾 准备保存消息 [${savedCount + 1}/${messages.length - savedMessageIds.size}]: ${message.id} (${message.role})`);
 
-            await window.electronAPI.invoke(IPCChannels.HISTORY_SAVE_MESSAGE, {
-              projectPath: currentProject.path,
-              sessionId: currentSessionId,
-              message: {
-                id: message.id,
-                role: message.role,
-                content: message.content,
-                timestamp: message.timestamp,
-                tokenUsage: message.tokenUsage,
-                toolUses: [],
-              },
-            });
-            console.log(`[ChatStore] 保存消息到 History: ${message.id} (${message.role})`);
+            try {
+              // ⭐ 清理内容：移除工具调用的装饰性文本（只用于 UI 显示，不存入数据库）
+              const cleanContent = message.content
+                .replace(/\n\n---\n\*\*工具调用:\*\*\n([A-Za-z_][^\n]*\n?)+/g, '') // 移除整个工具调用块
+                .replace(/^[A-Za-z_]+\s*(?:\(\d+\))?\n/gm, '') // 移除工具调用行（如 "Read" 或 "Edit (2)"）
+                .trim();
+
+              // 保存到 SQLite（单一数据源）
+              await window.electronAPI.invoke(IPCChannels.HISTORY_SAVE_MESSAGE, {
+                projectPath: currentProject.path,
+                sessionId: currentSessionId,
+                message: {
+                  id: message.id,
+                  role: message.role,
+                  content: cleanContent, // ⭐ 使用清理后的内容
+                  timestamp: message.timestamp,
+                  tokenUsage: message.tokenUsage,
+                  toolUses: [],
+                },
+              });
+
+              savedCount++;
+              console.log(`[ChatStore] ✅ 保存成功: ${message.id} (${message.role})`);
+            } catch (msgError) {
+              console.error(`[ChatStore] ❌ 保存消息失败: ${message.id}`, msgError);
+              throw msgError; // ⭐ 重新抛出错误，确保不会静默失败
+            }
+          } else {
+            skippedCount++;
+            console.log(`[ChatStore] ⏭️ 跳过已保存的消息: ${message.id}`);
           }
         }
 
-        console.log(`[ChatStore] 会话已保存到 History: ${sessionTitle} (${messages.length} 条消息)`);
+        console.log(`[ChatStore] ✅ 会话保存完成: ${sessionTitle}`, {
+          total: messages.length,
+          saved: savedCount,
+          skipped: skippedCount,
+        });
       } catch (error) {
-        console.error('[ChatStore] 会话保存到 History 失败:', error);
+        console.error('[ChatStore] ❌ 会话保存到 History 失败:', error);
+        console.error('[ChatStore] 错误详情:', error instanceof Error ? error.stack : error);
+        // ⭐ 不要静默吞掉错误 - 至少在控制台显示详细信息
       }
     },
 
@@ -818,6 +962,16 @@ export const useChatStore = create<ChatState>()(
 
       console.log(`[ChatStore] 项目切换: "${currentProjectPath}" → "${projectPath}"`);
 
+      // ⭐⭐⭐ 在离开当前项目前，自动生成工作流
+      if (currentProjectPath) {
+        try {
+          await get().generateWorkflowFromCurrentSession();
+        } catch (error) {
+          console.error('[ChatStore] 自动生成工作流失败:', error);
+          // 不阻止项目切换，只记录错误
+        }
+      }
+
       if (!projectPath) {
         // 无项目：使用全局会话
         console.log('[ChatStore] 切换到无项目模式，使用全局会话');
@@ -883,6 +1037,84 @@ export const useChatStore = create<ChatState>()(
           state.isLoading = false;
           state.currentProjectPath = projectPath; // 🔥 即使出错也更新项目路径
         });
+      }
+    },
+
+    /**
+     * ⭐ 取消当前会话
+     * 重置 isLoading 状态，防止 UI 一直显示"正在回复"
+     */
+    cancelSession: () => {
+      console.log('[ChatStore] 取消会话，重置 loading 状态');
+      set((state) => {
+        state.isLoading = false;
+        state.error = null;  // 清除现有错误
+        state.isCancelling = true;  // ⭐ 设置取消标志，忽略后续的错误事件
+      });
+
+      // ⭐ 5秒后清除取消标志（确保后端的错误事件已经处理完）
+      setTimeout(() => {
+        set((state) => {
+          state.isCancelling = false;
+        });
+      }, 5000);
+    },
+
+    /**
+     * ⭐⭐⭐ 从当前会话自动生成工作流
+     * 在离开项目前调用，将对话历史转换为可重用的工作流
+     */
+    generateWorkflowFromCurrentSession: async () => {
+      const messages = get().messages;
+      const currentProjectPath = get().currentProjectPath;
+
+      console.log(`[ChatStore] 开始生成工作流检查 - 项目: ${currentProjectPath}, 消息数: ${messages.length}`);
+
+      if (!currentProjectPath) {
+        console.log('[ChatStore] ❌ 无当前项目，跳过工作流生成');
+        return;
+      }
+
+      if (messages.length < 2) {
+        console.log(`[ChatStore] ❌ 消息数量不足 (${messages.length} < 2)，跳过工作流生成`);
+        return;
+      }
+
+      try {
+        // 从项目Store获取项目名称
+        const projectStore = useProjectStore.getState();
+        const currentProject = projectStore.currentProject;
+        const projectName = currentProject?.name || 'Unknown Project';
+
+        console.log(`[ChatStore] 为项目 ${projectName} 生成工作流...`);
+
+        // 准备消息数据（包括工具使用信息）
+        const messagesWithToolUses = messages.map((msg) => ({
+          id: msg.id,
+          role: msg.role,
+          content: msg.content,
+          timestamp: msg.timestamp,
+          toolUses: [], // TODO: 需要从实际数据中提取工具使用信息
+        }));
+
+        // 调用 IPC 生成工作流
+        const result = await window.electronAPI.invoke(
+          IPCChannels.WORKFLOW_GENERATE_FROM_CONVERSATION,
+          {
+            messages: messagesWithToolUses,
+            projectPath: currentProjectPath,
+            projectName,
+          }
+        );
+
+        if (result.workflow) {
+          console.log(`[ChatStore] ✅ 成功生成工作流: ${result.workflow.name} (${result.workflow.id})`);
+        } else {
+          console.log('[ChatStore] 未生成工作流（对话内容不足）');
+        }
+      } catch (error) {
+        console.error('[ChatStore] 生成工作流失败:', error);
+        throw error;
       }
     },
   })),

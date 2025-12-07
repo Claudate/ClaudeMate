@@ -162,6 +162,20 @@ export interface Workflow {
 }
 
 /**
+ * AI 模型配置（用于 OpenRouter）
+ */
+export interface AIModelConfig {
+  id: string;                          // 模型唯一标识
+  name: string;                        // 显示名称
+  modelId: string;                     // OpenRouter 模型 ID (如 'deepseek/deepseek-chat-v3.1:free')
+  type: 'system' | 'custom';           // 系统预设 或 用户自定义
+  useSystemKey: boolean;               // 是否使用系统内置的加密 API Key
+  customApiKey?: string;               // 用户自定义的 API Key（可选）
+  description?: string;                // 模型描述
+  isDefault?: boolean;                 // 是否为默认模型
+}
+
+/**
  * Application settings
  */
 export interface AppSettings {
@@ -175,6 +189,9 @@ export interface AppSettings {
   experimental: ExperimentalFeatures;
   // ⭐ 授权模式设置
   permissionMode: 'manual' | 'auto';  // manual: 手动授权（弹窗）, auto: 自动授权
+  // ⭐ AI 模型设置（用于 OpenRouter）
+  aiModels: AIModelConfig[];           // 可用的 AI 模型列表
+  defaultAIModel: string;              // 默认使用的 AI 模型 ID
 }
 
 export interface ExperimentalFeatures {
@@ -347,6 +364,106 @@ export interface SessionStatistics {
 }
 
 /**
+ * GitHub Sync Configuration
+ * 存储在 DatabaseService 的 AppSettings 中
+ */
+export interface GitHubSyncConfig {
+  enabled: boolean;                    // 是否启用 GitHub 同步
+  mode: 'manual' | 'auto';             // 手动/自动模式
+
+  // 连接方式选择 (Phase 1: 只实现 API)
+  connectionType: 'api';               // Phase 1 只支持 'api', Phase 2 扩展 'mcp'
+
+  // API 配置
+  token?: string;                      // GitHub Personal Access Token（加密存储）
+  repository?: string;                 // 仓库地址 (owner/repo)
+
+  // 通用配置
+  autoSyncInterval?: number;           // 自动同步间隔（分钟，最小 30）
+  messageCountTrigger?: number;        // 消息计数触发阈值（默认 10）
+  lastSyncTime?: number;               // 上次同步时间戳
+  syncBranch?: string;                 // 同步分支（默认 main）
+  includePatterns?: string[];          // 包含的文件模式
+  excludePatterns?: string[];          // 排除的文件模式（如 node_modules, .env）
+  lastSyncCommitSha?: string;          // 上次同步的 commit SHA
+
+  // Git 用户信息
+  gitUserName?: string;                // git config user.name
+  gitUserEmail?: string;               // git config user.email
+}
+
+/**
+ * GitHub 提交结果
+ */
+export interface GitHubCommitResult {
+  success: boolean;                    // 是否成功
+  commitSha?: string;                  // commit SHA
+  commitUrl?: string;                  // commit URL
+  filesChanged: number;                // 变更的文件数
+  error?: string;                      // 错误信息
+  timestamp: number;                   // 提交时间戳
+
+  // 关联的会话信息
+  sessionIds?: string[];               // 本次提交包含的会话 ID
+  projectPath?: string;                // 项目路径
+}
+
+/**
+ * GitHub 同步历史记录
+ * 用于追踪每次同步与聊天会话的关联
+ *
+ * 设计说明：
+ * - commitSha 作为主键（全局唯一，40 字符 SHA-1 哈希）
+ * - 通过 commitSha 可以直接定位到 GitHub 上的 commit
+ * - 方便代码回退：git reset --hard <commitSha>
+ */
+export interface GitHubSyncHistory {
+  commitSha: string;                   // GitHub commit SHA（主键，全局唯一）
+  commitUrl: string;                   // GitHub commit URL
+  projectPath: string;                 // 项目路径
+  sessionIds: string[];                // 本次同步包含的会话 ID 列表
+  filesChanged: number;                // 变更的文件数
+  message: string;                     // 提交消息
+  timestamp: number;                   // 同步时间戳
+  backend: 'api';                      // Phase 1 只有 'api'
+}
+
+/**
+ * 扩展 ChatSession 类型，添加 GitHub 关联
+ */
+export interface ChatSessionWithGitHub extends ChatSession {
+  githubSync?: {
+    commitSha?: string;                // 关联的 commit SHA
+    commitUrl?: string;                // commit URL
+    syncedAt?: number;                 // 同步时间戳
+    canRevert?: boolean;               // 是否可以回退
+  };
+}
+
+/**
+ * Git 状态信息
+ */
+export interface GitStatus {
+  isRepo: boolean;                     // 是否是 Git 仓库
+  hasRemote: boolean;                  // 是否配置了远程仓库
+  currentBranch?: string;              // 当前分支
+  hasUncommitted: boolean;             // 是否有未提交的更改
+  hasUnpushed: boolean;                // 是否有未推送的提交
+  modifiedFiles: string[];             // 修改的文件列表
+  untrackedFiles: string[];            // 未跟踪的文件列表
+}
+
+/**
+ * 文件变更记录
+ */
+export interface FileChange {
+  path: string;                        // 文件路径
+  type: 'added' | 'modified' | 'deleted'; // 变更类型
+  content?: string;                    // 文件内容（added/modified）
+  sessionId?: string;                  // 关联的会话 ID
+}
+
+/**
  * Event types for pub/sub pattern
  */
 export type AppEvent =
@@ -359,4 +476,7 @@ export type AppEvent =
   | { type: 'MEMORY_WARNING'; payload: { usage: number; limit: number } }
   | { type: 'ERROR_OCCURRED'; payload: { error: Error; context: string } }
   | { type: 'SESSION_UPDATED'; payload: ChatSessionMetadata }
-  | { type: 'SESSION_DELETED'; payload: { sessionId: string } };
+  | { type: 'SESSION_DELETED'; payload: { sessionId: string } }
+  | { type: 'GITHUB_SYNC_STARTED'; payload: { projectPath: string } }
+  | { type: 'GITHUB_SYNC_COMPLETED'; payload: GitHubCommitResult }
+  | { type: 'GITHUB_SYNC_FAILED'; payload: { error: string; projectPath: string } };

@@ -10,6 +10,7 @@ import { MemoryMonitor } from './monitors/MemoryMonitor';
 import { Logger } from './utils/Logger';
 import { ClaudeService } from './services/ClaudeService';
 import { DatabaseService } from './services/DatabaseService';
+import { GitHubSyncService } from './services/github/GitHubSyncService';
 
 const logger = Logger.getInstance('Main');
 
@@ -70,6 +71,11 @@ if (!gotTheLock) {
       // Initialize database
       await databaseService.initialize();
       logger.info('Database initialized');
+
+      // 🆕 Initialize GitHub Sync Service
+      const githubSyncService = GitHubSyncService.getInstance();
+      await githubSyncService.initialize();
+      logger.info('GitHub Sync Service initialized');
 
       // Create main window
       await windowManager.createMainWindow();

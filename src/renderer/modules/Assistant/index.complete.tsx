@@ -9,7 +9,7 @@ import { MessageList } from './components/MessageList';
 import { ChatInput } from './components/ChatInput';
 
 export default function Assistant() {
-  const { messages, isLoading, error, sendMessage, clearMessages } = useChatStore();
+  const { messages, isLoading, error, sendMessage, clearMessages, currentSessionId } = useChatStore();
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom when new messages arrive
@@ -106,7 +106,7 @@ export default function Assistant() {
       </div>
 
       {/* Chat Input */}
-      <ChatInput onSend={handleSend} isLoading={isLoading} />
+      <ChatInput onSend={handleSend} isLoading={isLoading} sessionId={currentSessionId} />
     </div>
   );
 }

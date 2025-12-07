@@ -94,3 +94,12 @@ secrets/
 *.key
 *.pem
 *.cert
+test-github-sync.js
+
+# Exclude build artifacts and IDE files
+build-output1/
+.trae/
+resources/*.zip
+resources/*.bak
+scripts/test*.js
+scripts/test*.ts

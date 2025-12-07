@@ -251,6 +251,61 @@ export class SearchIndexService {
   }
 
   /**
+   * ⭐⭐⭐ 获取所有会话（从 SQLite）
+   * @param projectPath 可选，按项目路径过滤
+   * @returns 会话元数据数组，按修改时间降序排列
+   */
+  public getAllSessions(projectPath?: string): ChatSessionMetadata[] {
+    try {
+      let sql = `SELECT data FROM sessions_metadata`;
+      const params: any[] = [];
+
+      // 按项目过滤
+      if (projectPath) {
+        sql += ` WHERE json_extract(data, '$.projectPath') = ?`;
+        params.push(projectPath);
+      }
+
+      // 按修改时间降序排序
+      sql += ` ORDER BY json_extract(data, '$.modifiedAt') DESC`;
+
+      const rows = this.db.prepare(sql).all(...params) as Array<{ data: string }>;
+
+      const sessions = rows.map(row => JSON.parse(row.data) as ChatSessionMetadata);
+
+      logger.info(`[SearchIndexService] 获取会话列表: ${sessions.length} 个会话${projectPath ? ` (项目: ${projectPath})` : ''}`);
+      return sessions;
+    } catch (error) {
+      logger.error('[SearchIndexService] 获取会话列表失败:', error);
+      return [];
+    }
+  }
+
+  /**
+   * ⭐⭐⭐ 获取所有项目名称（从 SQLite）
+   * @returns 去重的项目名称数组
+   */
+  public getAllProjectNames(): string[] {
+    try {
+      const sql = `
+        SELECT DISTINCT json_extract(data, '$.projectName') as project_name
+        FROM sessions_metadata
+        WHERE json_extract(data, '$.projectName') IS NOT NULL
+        ORDER BY project_name
+      `;
+
+      const rows = this.db.prepare(sql).all() as Array<{ project_name: string }>;
+      const projectNames = rows.map(row => row.project_name);
+
+      logger.info(`[SearchIndexService] 获取项目名称列表: ${projectNames.length} 个项目`);
+      return projectNames;
+    } catch (error) {
+      logger.error('[SearchIndexService] 获取项目名称失败:', error);
+      return [];
+    }
+  }
+
+  /**
    * 获取索引统计信息
    */
   public getStatistics(): {
